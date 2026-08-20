@@ -1,7 +1,7 @@
 # chrome-agent v0.12.0
 
 Single Rust binary for browser automation via CDP. Built for AI agents.
-~13.3K lines Rust, one dependency-free regex crate (`regex-lite`, for `assert --matches`), 3 MB binary.
+~16.5K lines Rust (~22.3K counting the in-file `#[cfg(test)]` modules), one dependency-free regex crate (`regex-lite`, for `assert --matches`), 3 MB binary.
 
 ## Architecture
 
