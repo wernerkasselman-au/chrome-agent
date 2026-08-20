@@ -115,7 +115,7 @@ fn snapshot_entries(browsers: &HashMap<String, BrowserSession>) -> HashMap<Strin
 /// Persist `store` to `path` under an exclusive lock, merging with whatever is
 /// currently on disk. This is the concurrency-safe core:
 ///
-/// 1. Take an exclusive advisory lock so no two writers interleave.
+/// 1. Take an exclusive lock so no two writers interleave (see `FileLock`).
 /// 2. Re-read the on-disk store (another agent may have written since we loaded).
 /// 3. Delete only the browsers this process held at load but no longer holds
 ///    (e.g. `close`), leaving entries other agents added after our load intact.
@@ -221,53 +221,45 @@ pub fn browsers_dir() -> Result<PathBuf, SessionError> {
     Ok(dev_browser_dir()?.join("browsers"))
 }
 
-/// Exclusive advisory file lock, released on drop. Best-effort no-op on
-/// non-Unix platforms (single-user desktop usage).
-#[cfg(unix)]
+/// Exclusive file lock, released on drop. One implementation on every platform.
+///
+/// It used to be `libc::flock` under `#[cfg(unix)]` and a no-op struct everywhere else.
+/// Every other non-Unix fallback in this crate declines to act and says so: `liveness`
+/// never prunes, `profiles` never frees, `kill_pid` never signals, and each accepts growth
+/// as the price of not guessing. This one was different in kind. It did not fail towards
+/// keeping, it removed mutual exclusion, and `save_to`'s read-merge-write is only
+/// concurrency-safe while the lock holds. Two `--browser` invocations on Windows could
+/// interleave step 2 (re-read) and step 6 (rename) and lose an entry, silently, under the
+/// one feature that advertises isolation. The atomic rename keeps the file from corrupting,
+/// so the failure was a lost update rather than a broken store, which is the harder kind
+/// to notice.
+///
+/// `File::lock` (stable since 1.89, and this crate pins 1.95) is the same `flock` on Unix
+/// and `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK` on Windows, so Unix behaviour is
+/// unchanged and Windows gains the exclusion it never had. It also drops the two `unsafe`
+/// blocks this type carried; the remaining `libc` uses in the crate are unaffected.
 struct FileLock(std::fs::File);
 
-#[cfg(unix)]
 impl FileLock {
     fn acquire(path: &Path) -> Result<Self, SessionError> {
-        use std::os::unix::io::AsRawFd;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .open(path)
             .map_err(|e| SessionError(format!("Failed to open lock {}: {e}", path.display())))?;
-        // SAFETY: flock on a valid fd only takes an advisory lock; no memory unsafety.
-        #[allow(unsafe_code)]
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(SessionError(format!(
-                "Failed to lock session store: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
+        file.lock()
+            .map_err(|e| SessionError(format!("Failed to lock session store: {e}")))?;
         Ok(Self(file))
     }
 }
 
-#[cfg(unix)]
 impl Drop for FileLock {
     fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd;
-        // SAFETY: unlocking a valid fd we hold; no memory unsafety.
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-struct FileLock;
-
-#[cfg(not(unix))]
-impl FileLock {
-    fn acquire(_path: &Path) -> Result<Self, SessionError> {
-        Ok(Self)
+        // Closing the handle releases the lock on both platforms, so a failure here changes
+        // nothing a caller could act on. Unlocking explicitly keeps the release at the point
+        // this type documents rather than at an implementation detail of `File`'s own drop.
+        let _ = self.0.unlock();
     }
 }
 
