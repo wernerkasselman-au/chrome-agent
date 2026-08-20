@@ -11,19 +11,8 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 mod common;
+use common::binary;
 
-/// Path to the built binary (sibling of the test binary).
-fn binary() -> String {
-    let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
 /// `file://` URL for a fixture in `tests/fixtures/`.
 /// Run `chrome-agent pipe` feeding the given JSON command lines on stdin,
