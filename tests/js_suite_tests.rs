@@ -44,8 +44,22 @@ fn the_extraction_engine_suite_passes() {
         js_dir.display()
     );
 
+    // `--test-reporter=tap` is not cosmetic: the pass count below is parsed out of this
+    // output, and node's default reporter is not stable across versions. It emitted TAP
+    // (`# pass 127`) when this test was written and emits the spec reporter (`ℹ pass 127`)
+    // on node 24, so the `strip_prefix("# pass ")` finds nothing and the parse fails.
+    //
+    // The failure mode is the one this file exists to prevent, inverted. The suite runs and
+    // passes, node exits 0, and the gate panics on its own bookkeeping. Worse, the same
+    // version drift in the other direction would be silent: a reporter with no pass line at
+    // all and a runner that matched no files both leave the assertion below unable to speak.
+    // Pinning the format keeps the check readable by this parser whatever node does next.
+    //
+    // CI has not seen it because no workflow step pins a node version, and the runner image
+    // currently ships one whose default is still TAP.
     let output = Command::new("node")
         .arg("--test")
+        .arg("--test-reporter=tap")
         .args(&tests)
         .current_dir(&root)
         .output()
