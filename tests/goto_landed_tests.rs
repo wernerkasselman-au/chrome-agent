@@ -126,14 +126,14 @@ fn page(title: &str) -> Vec<u8> {
          <article><h1>{title}</h1><p>{filler}</p><p>{filler}</p></article>"
     );
     let headers = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
         body.len()
     );
     [headers.as_bytes(), body.as_bytes()].concat()
 }
 
 fn found(location: &str) -> Vec<u8> {
-    format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n")
         .into_bytes()
 }
 
@@ -144,34 +144,50 @@ fn found(location: &str) -> Vec<u8> {
 /// `net::ERR_HTTP_RESPONSE_CODE_FAILURE` on the navigation itself.
 fn serve(mut stream: std::net::TcpStream) {
     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let mut request = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => request.extend_from_slice(&chunk[..n]),
+    // One connection, as many requests as the client sends down it.
+    //
+    // Every response used to say `Connection: close`, so each hop of a redirect needed a
+    // fresh socket: `/orders` closed, then Chrome opened another for `/login`. That churn is
+    // what failed on Windows, where the tests that load a page directly passed and every test
+    // following a redirect did not. Keeping the connection alive removes the hop entirely
+    // rather than trying to make the close land at the right moment.
+    loop {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => request.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let first_line =
+            String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_string();
+        // No request line: either the client is done with this connection, or it is a
+        // speculative preconnect that never carried one. Either way there is nothing to
+        // answer, and answering anyway made an identical fixture flake as
+        // `net::ERR_HTTP_RESPONSE_CODE_FAILURE` on the navigation itself.
+        let Some(path) = first_line.split_whitespace().nth(1) else {
+            break;
+        };
+        let response = match path {
+            "/clean" => page("Clean landing"),
+            // The auth bounce: the whole point of the feature.
+            "/orders" => found("/login?next=/orders"),
+            "/login?next=/orders" | "/login" => page("Sign in"),
+            // A redirect with nothing to do with authentication.
+            "/moved" => found("/settled"),
+            "/settled" => page("Settled page"),
+            // A server normalising a directory URL. Under the documented rule this is NOT a
+            // redirect, even though the wire carried a 302.
+            "/dir" => found("/dir/"),
+            "/dir/" => page("Directory index"),
+            _ => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                .to_vec(),
+        };
+        if stream.write_all(&response).is_err() {
+            break;
         }
     }
-    let first_line = String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_string();
-    let Some(path) = first_line.split_whitespace().nth(1) else {
-        finish(&mut stream);
-        return;
-    };
-    let response = match path {
-        "/clean" => page("Clean landing"),
-        // The auth bounce: the whole point of the feature.
-        "/orders" => found("/login?next=/orders"),
-        "/login?next=/orders" | "/login" => page("Sign in"),
-        // A redirect with nothing to do with authentication.
-        "/moved" => found("/settled"),
-        "/settled" => page("Settled page"),
-        // A server normalising a directory URL. Under the documented rule this is NOT a
-        // redirect, even though the wire carried a 302.
-        "/dir" => found("/dir/"),
-        "/dir/" => page("Directory index"),
-        _ => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
-    };
-    let _ = stream.write_all(&response);
     finish(&mut stream);
 }
 
