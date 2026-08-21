@@ -155,6 +155,19 @@ Plus four tests that asserted Unix spellings: daemon wording, a `file://` URL bu
 backslashes and no third slash, a screenshot path, and a uid carried between two browsers,
 which only ever worked because the ids happened to agree.
 
+### Windows: known, deliberately not done
+
+`session::liveness` still answers `Unknown` on Windows, so `prune_dead` never removes an
+entry there. It matters less than it did, because `close` now actually terminates the
+browser and removes its entry, so the store no longer grows from ordinary use; only a
+crashed browser leaves one behind.
+
+A `tasklist` implementation was written and taken back out. `prune_dead` calls `liveness`
+once per entry on every save, and a subprocess is ~150ms a call, which is a latency
+regression on every command in exchange for a problem that no longer occurs in normal use.
+Doing it properly means `OpenProcess`/`GetExitCodeProcess`, including the
+`ERROR_ACCESS_DENIED` case that mirrors Unix `EPERM`.
+
 ### Windows: what is still failing
 
 Two tests in `read_back_verdict_tests`, both downstream of `goto read_back_kinds.html`

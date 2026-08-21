@@ -358,32 +358,21 @@ pub fn liveness(pid: u32) -> Liveness {
             Liveness::Unknown
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
-        // The other half of the same gap `kill_pid` had. Without a probe no entry was ever
-        // provably dead, so `prune_dead` never removed one and the store grew for the life of
-        // the machine, which is the defect the Unix arm above was written to close.
+        // Still no probe here, deliberately. `kill_pid` gained one on Windows in the same
+        // change this comment was written for, and a matching `liveness` was written and then
+        // taken back out: `prune_dead` calls this once per entry on every save, and the
+        // obvious implementation shells out to `tasklist`, which is ~150ms a call. That is a
+        // latency regression on every command to fix a store that no longer grows from
+        // ordinary use, because `close` now actually closes.
         //
-        // `tasklist` answers a filter that matches nothing with an informational line and
-        // exit 0, so "no such pid" arrives as a body that does not start a CSV record. Only a
-        // failure to run the command at all is `Unknown`: that is the case where we genuinely
-        // did not look, and the store keeps the entry rather than guessing.
-        let Ok(output) = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-            .output()
-        else {
-            return Liveness::Unknown;
-        };
-        if String::from_utf8_lossy(&output.stdout).trim_start().starts_with('"') {
-            Liveness::Alive
-        } else {
-            Liveness::Dead
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        // No portable probe wired here, so no entry is ever provably dead and the
-        // store is never pruned. Growth is the previous behaviour, not a regression.
+        // Doing it properly means `OpenProcess`/`GetExitCodeProcess` rather than a subprocess,
+        // including the `ERROR_ACCESS_DENIED` case that mirrors Unix `EPERM`. That is its own
+        // piece of work and is recorded in docs/FORK.md rather than smuggled in here.
+        //
+        // Until then no entry is ever provably dead and the store keeps what it cannot judge,
+        // which is the safe direction and the pre-existing behaviour.
         let _ = pid;
         Liveness::Unknown
     }
