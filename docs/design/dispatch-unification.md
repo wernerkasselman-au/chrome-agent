@@ -108,6 +108,12 @@ dispatcher bodies remain.
 
 **Slice 2, `mutates_page` becomes an exhaustive method.** Deletes the third list.
 
+Slice 2 does not actually need slices 0 and 1, and it is where the only silent failure in
+this document lives. `verb-vocabulary.md` pulls it out as a standalone change: a canonical
+`Verb` enum that both dispatch matches and `mutates_page` match on exhaustively, which
+needs none of the clap and serde field reconciliation that makes the rest of this expensive.
+If only one thing here is ever built, build that.
+
 **Slice 3, collapse the dispatcher bodies one family at a time**, ordered by blast radius:
 read-only commands first (`inspect`, `text`, `read`, `tabs`, `diff`), then targeted
 actions, then the composites (`fill_and_submit`, `navigate_and_read`, `batch`).
