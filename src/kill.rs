@@ -59,9 +59,12 @@ pub fn reap_unpersisted() {
 /// `chrome-agent`, and `chromedriver` exists too. Under the exact PID-reuse race the
 /// guard is for, a reused pid landing on a sibling chrome-agent process would have been
 /// classified as a browser and killed — the scenario the guard claims to prevent.
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn is_browser_process(comm: &str) -> bool {
-    let base = comm.rsplit('/').next().unwrap_or(comm).to_ascii_lowercase();
+    // Unix hands us a path, Windows hands us a bare image name (`chrome.exe`). Taking the
+    // last path segment covers both, and the extension does not matter to the `contains`
+    // checks below.
+    let base = comm.rsplit(['/', '\\']).next().unwrap_or(comm).to_ascii_lowercase();
     if base.contains("chrome-agent") || base.contains("chromedriver") {
         return false;
     }
@@ -124,10 +127,46 @@ pub fn kill_pid(pid: u32) -> KillOutcome {
             .status();
         KillOutcome::Signalled
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // No portable kill wired here, so nothing is ever signalled — and saying
-        // `Gone` would be a claim about the process this platform never checked.
+        // `close` used to do nothing to the process here. It removed the session entry,
+        // printed that it had closed the browser, and left Chrome running forever. Every
+        // invocation leaked one, which is not a slow leak on a machine driving an agent.
+        //
+        // It also broke the test suite in a way that looked like something else: this file's
+        // read-back tests launch a browser each, the first four passed and everything after
+        // failed, because by the fifth launch the earlier four were still running.
+        //
+        // Same shape as the Unix arm above, including the pid-reuse guard, because the guard
+        // is the reason `KillOutcome` exists: `tasklist` names the image behind the pid, and
+        // a pid that has been recycled onto something else must be left alone.
+        let listing = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        // `tasklist` answers a filter that matches nothing with an INFO line on stdout and
+        // exit 0, so an empty-or-informational body is how "no such pid" arrives.
+        let Some(listing) = listing.filter(|l| l.starts_with('"')) else {
+            return KillOutcome::Gone;
+        };
+        let image = listing.trim_start_matches('"').split('"').next().unwrap_or_default();
+        if !is_browser_process(image) {
+            return KillOutcome::NotABrowser;
+        }
+        // `/T` because Chrome is a process tree and killing the parent alone orphans the
+        // renderers; `/F` because there is no console to deliver a polite signal to.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        KillOutcome::Signalled
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // No portable kill wired here, so nothing is ever signalled, and saying `Gone` would
+        // be a claim about a process this platform never checked.
         let _ = pid;
         KillOutcome::NotABrowser
     }
