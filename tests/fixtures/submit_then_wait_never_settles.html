@@ -1,0 +1,11 @@
+<!doctype html>
+<html><body>
+<!-- The submit handler works. The thing the caller waits for never appears, which is the
+     ordinary shape of a wait_for aimed at a selector or a phrase that the page spells
+     differently. The submit still happened, and the response has to say so. -->
+<form id="f" onsubmit="event.preventDefault(); document.getElementById('out').textContent='SUBMITTED'; window.__submits=(window.__submits||0)+1;">
+  <input id="email" name="email" type="text">
+  <button id="go" type="submit">Send</button>
+</form>
+<p id="out">idle</p>
+</body></html>

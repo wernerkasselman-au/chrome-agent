@@ -368,7 +368,20 @@ pub fn attach_verdict(obj: &mut serde_json::Value, assessment: crate::verdict::A
     // One token from a closed set of six, so an agent can branch on the next step without
     // parsing the hint prose. Written here because this is the one place all three modes
     // settle a verdict — the same reason `verdict_reason` lives here.
-    obj["next"] = json!(crate::verdict::next_for(assessment).as_str());
+    let mut next = crate::verdict::next_for(assessment);
+    // Same divergence `next_for` already makes for a page it could not read, for the same
+    // reason: `proceed` claims the caller can carry on from here, and a command that failed
+    // after mutating has left the page in a state nobody asked for. The verdict and the
+    // delta still describe what landed; the branch has to say to go and look.
+    //
+    // Decided on `ok` here rather than inside `next_for`, because `next_for` is a pure
+    // function of the assessment and whether the command succeeded is not part of one.
+    if next == crate::verdict_words::Next::Proceed
+        && obj.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+    {
+        next = crate::verdict_words::Next::Inspect;
+    }
+    obj["next"] = json!(next.as_str());
     if let Some(hint) = crate::verdict::hint_for(assessment) {
         // An action that already wrote a hint knows more than the verdict does — an
         // intercepted click can name the element that took it, where the generic hint can

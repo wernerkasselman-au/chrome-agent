@@ -36,12 +36,26 @@ pub async fn dispatch_fill_and_submit(client: &CdpClient, timeout: u64, cmd: &Va
     let submit_selector = cmd.get("submit").and_then(Value::as_str).ok_or("fill_and_submit: missing \"submit\" selector")?;
     let wait_for = cmd.get("wait_for").and_then(Value::as_str);
     let field_count = fields.len();
-    let mut outcomes = Vec::new();
+    // Every field is read out of the request BEFORE any of them is written. A malformed
+    // field discovered halfway through used to leave the earlier ones written and answer
+    // with an argument error, which reads exactly like a request refused before it touched
+    // the page. Validation that can run first has to run first.
+    let mut plan = Vec::with_capacity(field_count);
     for field in fields {
         let selector = field.get("selector").and_then(Value::as_str).ok_or("fill_and_submit: each field needs \"selector\"")?;
         let value = field.get("value").and_then(Value::as_str).ok_or("fill_and_submit: each field needs \"value\"")?;
-        let outcome = crate::element::fill_selector(client, selector, value).await?;
-        outcomes.push((selector.to_string(), outcome));
+        plan.push((selector, value));
+    }
+    let mut outcomes = Vec::new();
+    for (selector, value) in plan {
+        match crate::element::fill_selector(client, selector, value).await {
+            Ok(outcome) => outcomes.push((selector.to_string(), outcome)),
+            // Nothing written yet, so this is a refusal and the error is the whole story.
+            Err(e) if outcomes.is_empty() => return Err(e.into()),
+            // Fields are already written. Reporting only the failure would tell the caller
+            // its mutation did not happen, and the natural answer to that is to fill again.
+            Err(e) => return Ok(mutated_then_failed(&e.to_string(), "selector", &outcomes)),
+        }
     }
     let submitted = crate::element::click_selector(
         client,
@@ -49,16 +63,27 @@ pub async fn dispatch_fill_and_submit(client: &CdpClient, timeout: u64, cmd: &Va
         crate::hit_test::OnIntercept::from_cmd(cmd, crate::hit_test::OnIntercept::default()),
     )
     .await?;
+    // Best effort, for exactly the reason the `read` below is, and this one was the more
+    // dangerous of the two: the submit has already landed. A wait that times out used to
+    // fail the whole command, so the response said only that a wait timed out while the
+    // form had been submitted, and the natural answer to that is to submit again.
+    let mut wait_error = None;
     if let Some(pattern) = wait_for {
         let is_selector = pattern.contains('.') || pattern.contains('#') || pattern.contains('[') || pattern.contains('>');
         let wait_type = if is_selector { "selector" } else { "text" };
-        commands::wait::run(client, wait_type, pattern, timeout, 500).await?;
+        if let Err(e) = commands::wait::run(client, wait_type, pattern, timeout, 500).await {
+            wait_error = Some(e.to_string());
+        }
     }
-    // Best effort: Readability rejects plenty of legitimate pages, and the fill and the
-    // submit have already landed. Failing the whole command there tells an agent its
-    // mutation did not happen, and the natural response to that is to submit again.
-    let message = format!("Filled {field_count} fields, submitted, waited for '{}'", wait_for.unwrap_or("none"));
+    let message = match (wait_for, wait_error.as_deref()) {
+        (Some(p), None) => format!("Filled {field_count} fields, submitted, waited for '{p}'"),
+        (Some(p), Some(_)) => format!("Filled {field_count} fields, submitted; the wait for '{p}' did not finish"),
+        (None, _) => format!("Filled {field_count} fields, submitted, waited for 'none'"),
+    };
     let mut out = json!({"ok": true, "message": message});
+    if let Some(e) = wait_error {
+        out["wait_error"] = json!(e);
+    }
     // The submit's own delivery, at the top level where the verdict wiring reads it: a submit
     // button under a consent banner is the shape this command exists for, and it used to be
     // reported as a successful submit.
@@ -66,11 +91,32 @@ pub async fn dispatch_fill_and_submit(client: &CdpClient, timeout: u64, cmd: &Va
     // The only witness this command has. The change report runs after the submit, so a
     // field the page rewrote on the way in is no longer visible anywhere by then.
     out["values"] = crate::run_helpers::bulk_fill_report("selector", &outcomes);
+    // Best effort: Readability rejects plenty of legitimate pages, and the fill and the
+    // submit have already landed.
     match commands::read::run(client, false, None).await {
         Ok(read_result) => out["content"] = json!(read_result.text_content),
         Err(e) => out["read_error"] = json!(e.to_string()),
     }
     Ok(out)
+}
+
+/// A response for a command that mutated the page and then failed.
+///
+/// Returned as `Ok`, deliberately. `pipe::dispatch` and `pipe_dispatch::dispatch_single`
+/// return early on `Err`, before `attach_change_report` and the verdict run, so an `Err`
+/// here answers with the failure and nothing about the mutation that already happened. The
+/// caller reads `ok:false`, concludes its write did not land, and does it again.
+///
+/// `ok:false` still, because the command did not do what was asked. What changes is that
+/// the response now also carries the witness the command had, and rides through the hook
+/// that attaches the delta and the verdict.
+fn mutated_then_failed(error: &str, key: &str, outcomes: &[(String, crate::element::FillOutcome)]) -> Value {
+    json!({
+        "ok": false,
+        "error": error,
+        "mutated": true,
+        "values": crate::run_helpers::bulk_fill_report(key, outcomes),
+    })
 }
 
 pub fn dispatch_history(cmd: &Value) -> Result<Value, crate::BoxError> {
@@ -89,12 +135,23 @@ pub async fn dispatch_fill_form(
     let pairs = cmd.get("pairs").and_then(Value::as_array)
         .ok_or("fill-form requires \"pairs\" array (e.g. [{\"uid\":\"n1\",\"value\":\"a\"}])")?;
     let uid_map = crate::run_helpers::get_uid_map(store, browser_name, page_name);
-    let mut outcomes = Vec::new();
+    // Read every pair before writing any of them. Validating inside the write loop meant a
+    // malformed pair at position two answered `Each pair needs "uid"` with position one
+    // already written: an argument error, which is the shape of a request that never
+    // touched the page.
+    let mut plan = Vec::with_capacity(pairs.len());
     for pair in pairs {
         let uid = pair.get("uid").and_then(Value::as_str).ok_or("Each pair needs \"uid\"")?;
         let value = pair.get("value").and_then(Value::as_str).ok_or("Each pair needs \"value\"")?;
-        let outcome = crate::element::fill(client, &uid_map, uid, value).await?;
-        outcomes.push((uid.to_string(), outcome));
+        plan.push((uid, value));
+    }
+    let mut outcomes = Vec::new();
+    for (uid, value) in plan {
+        match crate::element::fill(client, &uid_map, uid, value).await {
+            Ok(outcome) => outcomes.push((uid.to_string(), outcome)),
+            Err(e) if outcomes.is_empty() => return Err(e.into()),
+            Err(e) => return Ok(mutated_then_failed(&e.to_string(), "uid", &outcomes)),
+        }
     }
     let inspect = cmd.get("inspect").and_then(Value::as_bool).unwrap_or(false);
     let mut obj = json!({"ok": true, "message": format!("Filled {} fields", pairs.len())});
