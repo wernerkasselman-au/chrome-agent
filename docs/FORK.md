@@ -79,35 +79,67 @@ deliberately unbuilt proposal in `docs/design/dispatch-unification.md`.
   two `unsafe` blocks go.
 - One `run_cli` and one `binary` in `tests/common`, replacing 25 and 33 copies.
 
+### Platform support
+
+`release.yml` ships five targets. Before this fork, tests had run on exactly one of them.
+Running them elsewhere found that a shipped target can be entirely non-functional and nobody
+would know, because the failure hides behind a suite that reports green.
+
+On Windows, four defects sat on top of one another, each hiding the next:
+
+1. The test suite did not compile. Two pieces of Unix-only test code were never gated, and
+   either one takes the whole test binary down. So `cargo test` had never run there.
+2. The binary stack-overflowed on startup. `run.rs` documents its dispatch frame as ~527 KB
+   of MIR locals; Windows gives the main thread 1 MiB and Linux gives it 8 MiB. Every
+   invocation died with `STATUS_STACK_OVERFLOW`, `--version` included.
+3. `chrome_available()` in the test harness looked for `google-chrome` with `which`, neither
+   of which exists on Windows, so every browser test skipped. A skip prints with `eprintln!`,
+   which cargo captures for a test it counts as passing, so the skips were invisible in CI
+   logs. `CHROME_AGENT_REQUIRE_CHROME` is what exposed them.
+4. `browser.rs` listed `chrome.exe` as its only Windows candidate, as a relative path, with
+   the PATH lookup gated to Linux. Chrome could never be found, over an error message
+   advising the caller to put it on PATH that never consulted PATH.
+
+1, 2 and 4 were shipped defects, not test problems. The tool has been published for Windows
+for the life of the project and could not open a page there.
+
 ## Verification status
 
-Run on Linux, against a real Chrome:
+CI runs on this fork across three platforms. `workflow_dispatch` is enabled, so a run can be
+triggered without inventing a commit.
 
-- 608 tests, 40 binaries, **0 skips** under `CHROME_AGENT_REQUIRE_CHROME=1`
-- `clippy --all-targets -- -D warnings` clean, with pedantic and nursery enabled
-- The static musl artifact builds, links statically, and drives a live site
-- A 61-command pipe session against a live site with no drift or failures
+| Platform | State |
+| --- | --- |
+| Linux (`ubuntu-24.04`) | 608 tests, 40 binaries, **0 skips** under `CHROME_AGENT_REQUIRE_CHROME=1` |
+| macOS (`macos-14`) | green on its first run, full suite including browser tests |
+| Windows (`windows-2022`) | 372 unit tests green. Browser tests excluded, see below |
 
-Cross-compiled and lint-gated for `x86_64-pc-windows-msvc`:
+Also verified on Linux: `clippy --all-targets -- -D warnings` clean with pedantic and
+nursery, the static musl artifact builds and links statically and drives a live site, and a
+61-command pipe session against a live site with no drift. `clippy` is clean for
+`x86_64-pc-windows-msvc` too.
 
-- `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings` clean
+The `FileLock` change is now observed rather than reasoned.
+`concurrent_saves_under_lock_lose_no_updates` (24 threads, load-modify-save, assert no lost
+update) passes on Windows, and could not have before: the non-Unix arm was an empty struct
+returning `Ok(())`. It needs no browser, so it runs in the selection above.
 
-One gap, and it needs a click rather than code:
+### Open: browser automation on Windows
 
-**CI has never run on this fork.** GitHub gates fork workflows behind a one-time enable in
-the Actions tab that is not reachable from the API. Everything above was verified on one
-developer machine. `ci.yml` now carries a `windows-2022` job and a `workflow_dispatch`
-trigger, so enabling Actions once gets both Linux and Windows validation.
+Once Chrome became discoverable, `action_report_tests` hung. It started at 05:21:02 and the
+job was still inside it when the 30 minute cap cut at 05:49, on one test that never reported.
+That is a hang, not slowness.
 
-Until that first Windows run, the lock change remains reasoned rather than observed:
-`File::lock` maps to `LockFileEx`, and Linux behaviour is provably unchanged, but nothing
-has executed it there.
+The Windows job therefore runs unit tests only. The narrowing is deliberate: the alternative
+is a job that is red forever, or one "fixed" by raising the timeout until it looks green,
+which is the kind of green this fork exists to stop trusting. Restore the full `cargo test`
+line, with `CHROME_AGENT_REQUIRE_CHROME`, when the hang is fixed.
 
-The Windows job deliberately does NOT set `CHROME_AGENT_REQUIRE_CHROME` yet. The suite has
-never run on that platform, so the first green run is what tells us which tests are actually
-portable; turning skips into failures before that is assuming the answer. Tighten it once
-there is a baseline.
+Until then Windows is **not** a supported platform for driving a browser, whatever
+`release.yml` implies. Either that gets fixed or the target should stop being published.
 
-Untested still: macOS, `--stealth`, `--connect`, `--copy-cookies`, downloads and PDF against
-real sites, iframes on real pages, and the npm packaging path.
+### Still untested
 
+`--stealth`, `--connect`, `--copy-cookies`, downloads and PDF against real sites, iframes on
+real pages, and the npm packaging path. `aarch64` on either Linux or macOS, both of which are
+shipped targets.
