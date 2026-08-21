@@ -154,6 +154,7 @@ fn serve(mut stream: std::net::TcpStream) {
     }
     let first_line = String::from_utf8_lossy(&request).lines().next().unwrap_or("").to_string();
     let Some(path) = first_line.split_whitespace().nth(1) else {
+        finish(&mut stream);
         return;
     };
     let response = match path {
@@ -171,6 +172,26 @@ fn serve(mut stream: std::net::TcpStream) {
         _ => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
     };
     let _ = stream.write_all(&response);
+    finish(&mut stream);
+}
+
+/// End a connection with a FIN the client can attribute, rather than a reset.
+///
+/// Dropping a `TcpStream` closes it, and on Windows a close with anything still queued in the
+/// receive buffer is an ABORTIVE close: the peer gets RST. Chrome reports that against
+/// whatever navigation was about to use the socket, as `net::ERR_SOCKET_NOT_CONNECTED`, which
+/// is how this fixture failed there while passing on Linux for years.
+///
+/// It bites hardest on the preconnect path above, which answers nothing at all: that socket
+/// is one Chrome opened speculatively and fully intends to use.
+fn finish(stream: &mut std::net::TcpStream) {
+    let _ = stream.flush();
+    // Half-close first, so the client sees the end of the response as a FIN.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    // Then drain whatever it had in flight, so nothing is left unread when the socket drops.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let mut sink = [0_u8; 512];
+    while matches!(stream.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 impl Server {
