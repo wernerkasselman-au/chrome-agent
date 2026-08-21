@@ -43,8 +43,42 @@ use serde_json::json;
 use crate::cli::Cli;
 use crate::run_helpers::error_hint;
 
-#[tokio::main]
-async fn main() {
+/// Windows gives the main thread 1 MiB, and this program does not fit in it.
+///
+/// `run.rs` documents its dispatch frame as ~527 KB of MIR locals across a 40-arm match.
+/// That future is a local of the async body below, so the frame exists before a single line
+/// of it runs, and `Box::pin` does not rescue it: the value is still materialised on the
+/// stack before the move, which a debug build does not elide.
+///
+/// Measured on CI the first time the suite ran on Windows: every invocation died with
+/// `STATUS_STACK_OVERFLOW` (exit -1073741571), `--version` included, which never reaches
+/// dispatch at all. Linux never saw it because its main thread gets 8 MiB.
+///
+/// Choosing the stack is the fix that does not depend on optimisation level or on the frame
+/// staying small as commands are added.
+fn main() {
+    // Generous rather than tuned: the cost is address space, not memory, and a limit picked
+    // to just fit today is a limit the next command silently exceeds.
+    const STACK_BYTES: usize = 16 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .name("chrome-agent".into())
+        .stack_size(STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(run_main());
+        })
+        .expect("spawn worker thread");
+    // A panic inside has already printed its own message; exit non-zero without adding a
+    // second one. Every deliberate exit path calls `process::exit` and never returns here.
+    if worker.join().is_err() {
+        std::process::exit(1);
+    }
+}
+
+async fn run_main() {
     // Not `Cli::parse()`: clap exits 2 on a usage error, and 2 now means "the assertion did
     // not hold" (`commands::assert`). A wrong flag is the caller's mistake, not a fact about
     // the page, so it joins every other operational failure at 1 and leaves 2 to mean one
@@ -110,17 +144,10 @@ async fn main() {
         }
     });
 
-    // `Box::pin`, and the reason is the platform, not style. `run` awaited directly puts its
-    // whole future in main's frame, and `run.rs` documents that frame as summing to ~527 KB of
-    // MIR locals across a 40-arm match. Linux gives the main thread 8 MiB and never noticed.
-    // Windows gives it 1 MiB, and every invocation died before doing anything:
-    //
-    //   thread 'main' has overflowed its stack
-    //   exit code -1073741571  (0xC00000FD, STATUS_STACK_OVERFLOW)
-    //
-    // Found the first time CI ran the suite on Windows, which was only possible once the test
-    // code compiled there at all. Boxing moves the future to the heap and leaves a pointer in
-    // the frame, for one allocation per process on a path that is about to do network I/O.
+    // Kept for the same reason `run` boxes its own biggest awaits: it keeps this frame small.
+    // It is NOT what makes Windows work. `Box::pin` materialises the value on the stack before
+    // moving it, so the frame still exists in a debug build; the stack size chosen in `main`
+    // is what fixes that. See the note there.
     if let Err(e) = Box::pin(run::run(cli)).await {
         // Same window, reached by returning rather than by signal: the launch succeeds and
         // then `CdpClient::connect` or `resolve_page_target` fails, so the browser is up and
