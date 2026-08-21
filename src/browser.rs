@@ -557,24 +557,44 @@ fn find_chromium() -> Result<PathBuf, BrowserError> {
             "chromium-browser",
         ]
     } else if cfg!(target_os = "windows") {
-        &[
-            "chrome.exe",
-        ]
+        // Was `["chrome.exe"]` alone, which is a relative path: `.exists()` resolved it
+        // against the working directory, and the PATH lookup below was gated to Linux. So
+        // the answer on Windows was always `NotFound`, over an error message advising the
+        // caller to put Chrome on PATH that never looked at PATH. Chrome has never been
+        // launchable there, which went unseen because the test suite did not compile on
+        // Windows and every browser test skipped itself.
+        //
+        // The install locations come from the environment rather than a hardcoded `C:`,
+        // because a machine that puts Program Files on another drive is ordinary.
+        &["chrome.exe"]
     } else {
         &[]
     };
 
-    for candidate in system_candidates {
-        let path = PathBuf::from(candidate);
+    let mut candidates: Vec<PathBuf> = system_candidates.iter().map(PathBuf::from).collect();
+    if cfg!(target_os = "windows") {
+        for root in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(dir) = std::env::var(root) {
+                candidates.push(
+                    PathBuf::from(dir).join("Google").join("Chrome").join("Application").join("chrome.exe"),
+                );
+            }
+        }
+    }
+
+    for path in candidates {
         if path.exists() {
             return Ok(path);
         }
-        // For Linux: check if it's on PATH
-        if cfg!(target_os = "linux")
-            && let Ok(output) = Command::new("which").arg(candidate).output()
+        // PATH lookup, on the platforms that have a command for it. `which` is not one on
+        // Windows; `where` is.
+        let locator = if cfg!(target_os = "windows") { "where" } else { "which" };
+        if (cfg!(target_os = "linux") || cfg!(target_os = "windows"))
+            && let Ok(output) = Command::new(locator).arg(&path).output()
                 && output.status.success() {
-                    let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !found.is_empty() {
+                    // `where` can answer with several lines; the first is the one it would run.
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    if let Some(found) = text.lines().next().map(str::trim).filter(|l| !l.is_empty()) {
                         return Ok(PathBuf::from(found));
                     }
                 }
