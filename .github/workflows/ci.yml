@@ -98,24 +98,19 @@ jobs:
             exit 1
           }
           & $chrome --version
-      # Unit tests only, and the narrowing is deliberate rather than a convenience.
+      # `--test-threads=1` for the reason the Linux job uses it: the suite drives real
+      # browsers and a shared session store.
       #
-      # Browser-driving on Windows does not work yet and is tracked in docs/FORK.md. Once
-      # Chrome became discoverable, `action_report_tests` hung: it started at 05:21:02 and
-      # the job was still inside it when the 30 minute cap cut at 05:49, on a single test
-      # that never reported a result. That is a hang, not slowness, and it is a real defect
-      # rather than a CI setting to tune away.
+      # This ran unit-tests-only for a while, because the browser tests hung: Chrome inherited
+      # our stdout handle, so a caller reading our output waited for the browser's lifetime
+      # instead of the command's, and one test sat for 28 minutes. Fixed in `browser.rs`, and
+      # `tests/output_pipe_tests.rs` pins it.
       #
-      # Running the whole suite here would either be red forever or, worse, be "fixed" by
-      # raising the timeout until it looked green. These 372 tests are the ones that actually
-      # gate something on this platform today: they are what proved the `FileLock` change,
-      # since `concurrent_saves_under_lock_lose_no_updates` needs no browser and passes here.
-      #
-      # `CHROME_AGENT_REQUIRE_CHROME` is not set because no test in this selection can skip
-      # for want of a browser. Restore the full `cargo test` line, with the variable, when the
-      # hang is fixed.
-      - name: Unit tests (browser tests excluded, see docs/FORK.md)
-        run: cargo test --bins -- --test-threads=1
+      # `CHROME_AGENT_REQUIRE_CHROME` is on: a skip is a pass, and this platform has already
+      # shown how much can hide behind one.
+      - run: cargo test -- --test-threads=1
+        env:
+          CHROME_AGENT_REQUIRE_CHROME: 1
 
   # FORK. `release.yml` ships five targets and, before today, tests had run on exactly one of
   # them. Windows turned out to be broken outright: every invocation died with

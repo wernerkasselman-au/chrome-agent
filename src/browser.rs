@@ -215,6 +215,17 @@ async fn launch_browser(opts: &BrowserOptions) -> Result<BrowserConnection, Brow
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
 
+    // Redirecting Chrome's own three handles is not enough on Windows. `CreateProcessW` is
+    // called with `bInheritHandles = TRUE` and no handle list, so EVERY inheritable handle in
+    // this process passes to the child, including the stdout we were handed. Chrome then
+    // holds the write end of the caller's pipe after we exit, the reader never sees EOF, and
+    // anything waiting on our output blocks until the browser dies.
+    //
+    // Measured: `action_report_tests` on CI hung for 28 minutes inside one test, which is the
+    // browser's lifetime rather than the command's. Unix does not have this because Rust
+    // creates its pipe fds close-on-exec, so a grandchild never sees them.
+    detach_std_handles_from_children();
+
     let mut child = cmd.spawn().map_err(|e| {
         BrowserError::Launch(format!("Failed to launch {}: {e}", chromium_path.display()))
     })?;
@@ -507,6 +518,50 @@ fn devtools_active_port_candidates() -> Vec<PathBuf> {
 }
 
 const DISCOVERY_PORTS: &[u16] = &[9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229];
+/// Stop children inheriting the standard handles this process was given.
+///
+/// Windows only, and a no-op everywhere else: Unix creates its pipe descriptors
+/// close-on-exec, so this problem cannot arise there.
+///
+/// Clearing the flag does not affect our own use of the handles. We keep reading and writing
+/// them; a process we spawn simply does not get a copy.
+#[cfg(windows)]
+fn detach_std_handles_from_children() {
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    // STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE.
+    // The Win32 constants are negative i32 by definition; `cast_unsigned` keeps that explicit.
+    const STD_HANDLES: [u32; 3] =
+        [(-10i32).cast_unsigned(), (-11i32).cast_unsigned(), (-12i32).cast_unsigned()];
+
+    // Declared here rather than pulled in as a dependency, for the reason `base64.rs` is
+    // hand-rolled: the release path depends on the graph staying free of anything that links
+    // C, and two Win32 declarations are cheaper than a crate.
+    #[allow(unsafe_code)]
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> *mut core::ffi::c_void;
+        fn SetHandleInformation(handle: *mut core::ffi::c_void, mask: u32, flags: u32) -> i32;
+    }
+
+    for which in STD_HANDLES {
+        // SAFETY: both calls take a handle this process already owns and only read or clear
+        // an inheritance flag on it. Neither dereferences memory we supply, and a failure is
+        // reported by return value rather than by unwinding.
+        #[allow(unsafe_code)]
+        unsafe {
+            let handle = GetStdHandle(which);
+            if !handle.is_null() {
+                // A failure here is not worth failing the launch over: the outcome is the
+                // pre-existing behaviour, which is a caller that waits longer than it should.
+                let _ = SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
+/// No-op: Unix pipe descriptors are close-on-exec, so a grandchild never inherits them.
+#[cfg(not(windows))]
+const fn detach_std_handles_from_children() {}
+
 
 /// Find the Chromium executable.
 fn find_chromium() -> Result<PathBuf, BrowserError> {
