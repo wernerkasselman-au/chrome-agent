@@ -394,8 +394,12 @@ fn headed_screenshot_returns_path() {
     let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "screenshot"]);
 
     if code == 0 {
+        // Separators normalised before matching. The tool is right to answer
+        // `C:\Users\...\.chrome-agent\tmp\shot.png` on Windows; asserting the Unix
+        // spelling of a path is the test being parochial, not the tool being wrong.
+        let normalised = stdout.replace('\\', "/");
         assert!(
-            stdout.contains(".png") && stdout.contains(".chrome-agent/tmp/"),
+            normalised.contains(".png") && normalised.contains(".chrome-agent/tmp/"),
             "screenshot should return a file path: {stdout}"
         );
         let path = stdout.trim();
