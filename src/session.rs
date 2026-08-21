@@ -61,6 +61,24 @@ pub struct PageSession {
     pub last_snapshot_frame: Option<String>,
     #[serde(default)]
     pub last_snapshot_loader: Option<String>,
+    /// Something moved the page since `last_snapshot` was taken, and it was not an action
+    /// answering for itself.
+    ///
+    /// `eval` runs caller-supplied JavaScript and `extract --scroll` drives a lazy list into
+    /// existence; neither takes a change report, and both leave the document identity intact,
+    /// so nothing downstream can tell the stored snapshot is out of date.
+    ///
+    /// Two consumers read `last_snapshot` and they are asking different questions. `diff`
+    /// asks what changed since the caller last looked, and an `eval`'s work belongs in that
+    /// answer. An action's change report asks what THAT action did, and the same work must
+    /// not appear there: measured, a click on an inert button reported `changed / tree_delta`
+    /// and quoted a paragraph the previous `eval` had appended.
+    ///
+    /// So the snapshot is kept for `diff` and flagged for the action path, which re-reads the
+    /// page before acting rather than trusting it. Costs one tree read, and only on the first
+    /// action after such a command.
+    #[serde(default)]
+    pub baseline_moved: bool,
 }
 
 /// Load the session store from disk. Returns empty store if file doesn't exist.
@@ -426,6 +444,7 @@ pub fn ensure_page<'a>(
             last_snapshot: None,
             last_snapshot_frame: None,
             last_snapshot_loader: None,
+            baseline_moved: false,
         })
 }
 

@@ -262,17 +262,29 @@ pub fn invalidates_baseline(cmd: &Value) -> bool {
     }
 }
 
-/// Drop the stored baseline for a page, so nothing downstream compares against it.
-pub fn clear_baseline(store: &mut SessionStore, browser_name: &str, page_name: &str) {
+/// Record that the page moved without an action answering for it.
+///
+/// Deliberately not a clear. The stored snapshot is still the right answer for `diff`, which
+/// asks what changed since the caller last looked. It is only wrong as a base for the next
+/// action's claim, and the action path handles that by re-reading. See
+/// `session::PageSession::baseline_moved`.
+pub fn mark_baseline_moved(store: &mut SessionStore, browser_name: &str, page_name: &str) {
     if let Some(page) = store
         .browsers
         .get_mut(browser_name)
         .and_then(|b| b.pages.get_mut(page_name))
     {
-        page.last_snapshot = None;
-        page.last_snapshot_frame = None;
-        page.last_snapshot_loader = None;
+        page.baseline_moved = true;
     }
+}
+
+/// Whether an action's stored baseline has been overtaken since it was written.
+pub fn baseline_moved(store: &SessionStore, browser_name: &str, page_name: &str) -> bool {
+    store
+        .browsers
+        .get(browser_name)
+        .and_then(|b| b.pages.get(page_name))
+        .is_some_and(|p| p.baseline_moved)
 }
 
 /// Commands that can move the page, and therefore owe the caller a change report.

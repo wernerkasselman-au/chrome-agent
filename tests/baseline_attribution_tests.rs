@@ -9,6 +9,12 @@
 //! Measured before the fix, on this fixture: an `eval` appended a paragraph, and the
 //! following click on an inert button answered `changed / tree_delta` and quoted that
 //! paragraph as its own delta. Not a missing claim, a false one, about causation.
+//!
+//! The stored snapshot is NOT dropped, and `diff_tests` pins why: `diff` asks what changed
+//! since the caller last looked, and an `eval`'s work belongs in that answer. It is only
+//! wrong as the base for the next action's claim. So it is flagged instead, and the action
+//! path re-reads the page before acting. The click then answers accurately rather than
+//! merely declining to answer.
 
 use std::process::Command;
 
@@ -76,7 +82,7 @@ fn an_evals_changes_are_never_reported_as_the_next_commands_delta() {
 
     // The eval says it dropped the baseline, so `no_baseline` on the next command is
     // explained rather than mysterious.
-    assert_eq!(eval["baseline_cleared"], true, "eval must say it invalidated the baseline: {eval}");
+    assert_eq!(eval["baseline_moved"], true, "eval must say it overtook the baseline: {eval}");
 
     // The click did nothing. Whatever it answers, it must not claim the eval's paragraph.
     let delta = click["delta"].as_str().unwrap_or_default();
@@ -87,6 +93,12 @@ fn an_evals_changes_are_never_reported_as_the_next_commands_delta() {
     assert_ne!(
         click["verdict_reason"], "tree_delta",
         "an inert click has no tree delta of its own: {click}"
+    );
+    // Re-reading rather than dropping the baseline is what lets this stay a real answer
+    // instead of an admission of ignorance.
+    assert_ne!(
+        click["verdict_reason"], "no_baseline",
+        "the action re-reads the page, so it still has something to say: {click}"
     );
 }
 
@@ -116,8 +128,8 @@ fn a_scrolling_extract_does_not_leave_its_lazy_rows_for_the_next_command() {
     let click = &responses[3];
 
     assert_eq!(
-        extract["baseline_cleared"], true,
-        "a scrolling extract invalidates the baseline even when it fails: {extract}"
+        extract["baseline_moved"], true,
+        "a scrolling extract overtakes the baseline even when it fails: {extract}"
     );
     let delta = click["delta"].as_str().unwrap_or_default();
     assert!(
@@ -145,7 +157,7 @@ fn an_extract_that_did_not_scroll_leaves_the_baseline_alone() {
         ],
     );
     assert!(
-        responses[2].get("baseline_cleared").is_none(),
+        responses[2].get("baseline_moved").is_none(),
         "a plain extract moves nothing: {}",
         responses[2]
     );

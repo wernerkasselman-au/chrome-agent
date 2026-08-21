@@ -723,16 +723,39 @@ pub async fn dispatch_single(
     // Capture the baseline before dispatching: a command run with `inspect` refreshes it
     // itself, and comparing against the refreshed copy would report that nothing moved.
     let baseline = if report.changes && mutates_page(cmd_name) {
-        store
-            .browsers
-            .get(browser_name)
-            .and_then(|b| b.pages.get(page_name))
-            .map(|p| {
-                (
-                    p.last_snapshot.clone(),
-                    p.last_snapshot_frame.clone().zip(p.last_snapshot_loader.clone()),
-                )
-            })
+        // If a non-reporting command moved the page since the stored snapshot (an `eval`, an
+        // `extract --scroll`), that snapshot is no longer a base for THIS action's claim:
+        // its changes would be reported as this action's delta. Re-read the page now so the
+        // comparison starts from what is actually on screen.
+        //
+        // `last_snapshot` is deliberately left as it was. `diff` compares against the
+        // caller's last explicit look, and an `eval`'s work belongs in that answer even
+        // though it does not belong in this one.
+        if crate::pipe_report::baseline_moved(store, browser_name, page_name) {
+            let fresh = commands::inspect::run(client, false, None, None, None).await.ok();
+            if let Some(page) = store
+                .browsers
+                .get_mut(browser_name)
+                .and_then(|b| b.pages.get_mut(page_name))
+            {
+                page.baseline_moved = false;
+            }
+            Some(fresh.map_or((None, None), |s| {
+                let identity = s.identity;
+                (Some(s.text), identity)
+            }))
+        } else {
+            store
+                .browsers
+                .get(browser_name)
+                .and_then(|b| b.pages.get(page_name))
+                .map(|p| {
+                    (
+                        p.last_snapshot.clone(),
+                        p.last_snapshot_frame.clone().zip(p.last_snapshot_loader.clone()),
+                    )
+                })
+        }
     } else {
         None
     };
@@ -741,9 +764,9 @@ pub async fn dispatch_single(
     // lazy list into existence and then answered "No repeating pattern found", so a clear
     // placed after the dispatch never ran. Whether the command succeeded is not the question.
     // Whether the stored snapshot still describes the page is, and after this one it does not.
-    let cleared_baseline = crate::pipe_report::invalidates_baseline(cmd);
-    if cleared_baseline {
-        crate::pipe_report::clear_baseline(store, browser_name, page_name);
+    let moved_baseline = crate::pipe_report::invalidates_baseline(cmd);
+    if moved_baseline {
+        crate::pipe_report::mark_baseline_moved(store, browser_name, page_name);
     }
     let mut value = {
     let result: Result<Value, crate::BoxError> = match cmd_name {
@@ -794,8 +817,8 @@ pub async fn dispatch_single(
         Err(e) => {
             let msg = e.to_string();
             let mut obj = json!({"ok": false, "error": msg});
-            if cleared_baseline {
-                obj["baseline_cleared"] = json!(true);
+            if moved_baseline {
+                obj["baseline_moved"] = json!(true);
             }
             if let Some(h) = crate::run_helpers::error_hint(&msg, browser_name) { obj["hint"] = json!(h); }
             return obj;
@@ -822,8 +845,8 @@ pub async fn dispatch_single(
     // A command that can move the page without reporting on it must not leave the previous
     // snapshot standing: the next action would diff against it and call this command's
     // changes its own. See `pipe_report::invalidates_baseline`.
-    if cleared_baseline {
-        value["baseline_cleared"] = json!(true);
+    if moved_baseline {
+        value["baseline_moved"] = json!(true);
     }
     value
 }

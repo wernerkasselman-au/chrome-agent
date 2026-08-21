@@ -248,10 +248,30 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
     //
     // Before the match, not inside the arms: `cli.command` is consumed by it, and the point
     // of clearing early is that it must not depend on the command succeeding.
-    if invalidates_baseline(&cli.command) {
-        crate::pipe_report::clear_baseline(&mut store, &cli.browser, &cli.page);
-        let _ = session::save_session(&mut store);
+    // If a previous invocation moved the page without answering for it, the stored snapshot
+    // is not a base for this command's claim. Re-read before acting, so a delta describes
+    // this command and not the one before it.
+    //
+    // `diff` is the exception, and the only one: it asks what changed since the caller last
+    // looked, so the pre-move snapshot IS its answer (`tests/diff_tests.rs` pins this). Every
+    // other reporting command was going to overwrite `last_snapshot` anyway, so refreshing
+    // ahead of it costs `diff` nothing it was not already going to lose.
+    if crate::pipe_report::baseline_moved(&store, &cli.browser, &cli.page)
+        && !matches!(cli.command, Command::Diff)
+        && let Ok(fresh) = commands::inspect::run(&client, false, None, None, None).await
+        && let Some(browser_s) = store.browsers.get_mut(&cli.browser)
+    {
+        let page = session::ensure_page(browser_s, &cli.page, &target_id);
+        let (f, l) = fresh.identity.map_or((None, None), |(f, l)| (Some(f), Some(l)));
+        page.last_snapshot = Some(fresh.text);
+        page.last_snapshot_frame = f;
+        page.last_snapshot_loader = l;
+        page.baseline_moved = false;
     }
+    if invalidates_baseline(&cli.command) {
+        crate::pipe_report::mark_baseline_moved(&mut store, &cli.browser, &cli.page);
+    }
+    let _ = session::save_session(&mut store);
     match cli.command {
         Command::Goto { url, inspect, max_depth, wait_for, headers } => {
             let depth = max_depth.or(cli.max_depth);
