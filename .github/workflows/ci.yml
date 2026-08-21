@@ -108,6 +108,10 @@ jobs:
       #
       # `CHROME_AGENT_REQUIRE_CHROME` is on: a skip is a pass, and this platform has already
       # shown how much can hide behind one.
+      # The extraction engine's jsdom suite is part of the gate on every platform, not just
+      # Linux. Without this it skips, and a skip is a pass.
+      - name: Install the extraction suite's dependencies
+        run: npm ci --prefix tests/js
       - run: cargo test -- --test-threads=1
         env:
           CHROME_AGENT_REQUIRE_CHROME: 1
@@ -140,8 +144,13 @@ jobs:
             exit 1
           fi
           "$APP" --version
-      # CHROME_AGENT_REQUIRE_CHROME is deliberately NOT set on the first run of a platform,
-      # for the reason the Windows job gave: the first green run is what tells us which tests
-      # are genuinely portable, and asserting that in advance is assuming the answer. Tighten
-      # once there is a baseline.
+      # The extraction engine's jsdom suite is part of the gate on every platform, not just
+      # Linux. Without this it skips, and a skip is a pass.
+      - name: Install the extraction suite's dependencies
+        run: npm ci --prefix tests/js
+      # Baseline established over two green runs, so the guarantee goes on here too. It was
+      # left off for the first run deliberately, and leaving it off any longer would have kept
+      # hiding the jsdom suite skipping for want of the install step above.
       - run: cargo test -- --test-threads=1
+        env:
+          CHROME_AGENT_REQUIRE_CHROME: 1
