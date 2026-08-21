@@ -191,8 +191,18 @@ fn status_works_without_browser() {
 #[test]
 fn stop_when_no_daemon() {
     let (stdout, _, code) = run_cli_full(&["stop"]);
-    assert_eq!(code, 0);
-    assert!(stdout.contains("not running") || stdout.contains("stopped"));
+    assert_eq!(code, 0, "stop is not an error when there is nothing to stop: {stdout}");
+    // The honest answer differs by platform and both are right. On Unix there is a daemon and
+    // it is not running. On Windows there is no daemon to run at all, and `cmd_stop` says so
+    // rather than reporting that it stopped something. Exit 0 either way: the caller asked for
+    // a state that already holds.
+    //
+    // Asserting only the Unix wording is what failed the first time this suite ran on Windows.
+    const HONEST: [&str; 3] = ["not running", "stopped", "not supported"];
+    assert!(
+        HONEST.iter().any(|answer| stdout.contains(answer)),
+        "expected one of {HONEST:?}, got: {stdout}"
+    );
 }
 
 #[test]
