@@ -101,8 +101,43 @@ jobs:
       # `--test-threads=1` for the reason the Linux job uses it: the suite drives real
       # browsers and a shared session store.
       #
-      # CHROME_AGENT_REQUIRE_CHROME is deliberately NOT set yet. The suite has never run on
-      # this platform, so the first green run is the one that tells us which tests are
-      # genuinely portable. Turning skips into failures before that is knowing the answer in
-      # advance. Tighten it once this job has a baseline.
+      # The first green run reported 585 passing and zero skips, so the guarantee the Linux
+      # job enforces holds here too and is now pinned. Without this a browser that stops
+      # being found turns the browser tests into green no-ops.
+      - run: cargo test -- --test-threads=1
+        env:
+          CHROME_AGENT_REQUIRE_CHROME: 1
+
+  # FORK. `release.yml` ships five targets and, before today, tests had run on exactly one of
+  # them. Windows turned out to be broken outright: every invocation died with
+  # STATUS_STACK_OVERFLOW because the main thread's 1 MiB could not hold the dispatch frame.
+  # That shipped as a release target for the whole life of the project.
+  #
+  # macOS is the other half of that gap, on two shipped targets, and `browser.rs` carries
+  # macOS-specific discovery paths that nothing has ever executed. Same reasoning as the
+  # Windows job: the only way to know is to run it.
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo clippy --all-targets -- -D warnings
+      # A skip is a pass, so a runner without a browser would report green. Install rather
+      # than assert: unlike the Linux and Windows images, Chrome is not guaranteed here.
+      - name: Require a real browser for the test run
+        run: |
+          APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          if [ ! -x "$APP" ]; then
+            brew install --cask google-chrome || true
+          fi
+          if [ ! -x "$APP" ]; then
+            echo "::error::No Chrome on this runner. The browser tests would skip themselves and report green."
+            exit 1
+          fi
+          "$APP" --version
+      # CHROME_AGENT_REQUIRE_CHROME is deliberately NOT set on the first run of a platform,
+      # for the reason the Windows job gave: the first green run is what tells us which tests
+      # are genuinely portable, and asserting that in advance is assuming the answer. Tighten
+      # once there is a baseline.
       - run: cargo test -- --test-threads=1
