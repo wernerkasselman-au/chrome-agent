@@ -105,81 +105,77 @@ for the life of the project and could not open a page there.
 
 ## Verification status
 
-CI runs on this fork across three platforms. `workflow_dispatch` is enabled, so a run can be
-triggered without inventing a commit.
+CI runs on three platforms and all three are green with zero skips. Every job installs the
+jsdom suite and sets `CHROME_AGENT_REQUIRE_CHROME`, so a test that declines to run fails the
+build rather than passing quietly.
 
-| Platform | State |
+| Platform | Result |
 | --- | --- |
-| Linux (`ubuntu-24.04`) | 608 tests, 40 binaries, **0 skips** under `CHROME_AGENT_REQUIRE_CHROME=1` |
-| macOS (`macos-14`) | green on its first run, full suite including browser tests |
-| Windows (`windows-2022`) | 538 tests passing, 2 failing. Browser automation works; see below |
+| Linux (`ubuntu-24.04`) | 609 passed, 0 skips |
+| macOS (`macos-14`) | passed, 0 skips |
+| Windows (`windows-2022`) | 586 passed, 0 skips |
 
 Also verified on Linux: `clippy --all-targets -- -D warnings` clean with pedantic and
 nursery, the static musl artifact builds and links statically and drives a live site, and a
 61-command pipe session against a live site with no drift. `clippy` is clean for
-`x86_64-pc-windows-msvc` too. All three jobs install the jsdom suite and set
-`CHROME_AGENT_REQUIRE_CHROME`, so a skip fails rather than passing.
+`x86_64-pc-windows-msvc` too.
 
-The `FileLock` change is observed rather than reasoned.
-`concurrent_saves_under_lock_lose_no_updates` (24 threads, load-modify-save, assert no lost
-update) passes on Windows, and could not have before: the non-Unix arm was an empty struct
-returning `Ok(())`.
+## Windows: it never worked, and now it does
 
-### Windows: what was actually wrong
+`release.yml` ships five targets. Before this fork, tests had run on one. Windows was
+published for the life of the project and could not open a page. Six defects sat on top of
+one another, each hiding the next, and four were shipped rather than test problems.
 
-Six defects, each hidden by the one above it. Three were shipped, not test problems.
-
-1. **The test suite did not compile.** Two pieces of Unix-only test code were never gated,
-   and either takes the whole binary down. Nothing had ever run.
+1. **The test suite did not compile.** Two pieces of Unix-only test code were never gated.
+   Nothing on the platform had ever run, which is what kept the rest invisible.
 2. **The binary stack-overflowed on startup.** `run.rs` documents its dispatch frame as
    ~527 KB of MIR locals; Windows gives the main thread 1 MiB against Linux's 8 MiB. Every
-   invocation died, `--version` included. Boxing the future does not fix it, because the
-   value is materialised on the stack before the move; the runtime now runs on a thread whose
-   stack size we choose.
-3. **`chrome_available()` looked for `google-chrome` with `which`.** Neither exists on
-   Windows, so every browser test skipped, and a skip prints with `eprintln!` which cargo
-   hides for a test it counts as passing. Invisible until `CHROME_AGENT_REQUIRE_CHROME`.
-4. **`browser.rs` could not find Chrome.** Its only Windows candidate was `chrome.exe` as a
-   relative path, with the PATH lookup gated to Linux, behind an error advising the caller to
-   put Chrome on PATH that never consulted PATH.
-5. **Chrome inherited our stdout, so reading a command's output waited for the browser.**
-   `CreateProcessW` runs with `bInheritHandles = TRUE` and no handle list, so every
-   inheritable handle passes to the child, and `goto` deliberately leaves Chrome running.
-   The reader never saw EOF: one test sat for 28 minutes. Unix cannot reach this because Rust
-   creates its pipe descriptors close-on-exec.
-6. **The fixture HTTP server reset connections instead of closing them.** Dropping a socket
-   with anything queued is an abortive close on Windows, which Chrome reports as
-   `net::ERR_SOCKET_NOT_CONNECTED` against the navigation about to use it.
+   invocation died, `--version` included. Boxing the future does not help, because the value
+   is materialised on the stack before the move; the runtime runs on a thread whose stack size
+   we choose.
+3. **`chrome_available()` in the harness looked for `google-chrome` with `which`.** Neither
+   exists there, so every browser test skipped, and a skip prints with `eprintln!` which cargo
+   hides for a test it counts as passing.
+4. **`browser.rs` could not find Chrome.** Its only candidate was `chrome.exe` as a relative
+   path, with the PATH lookup gated to Linux, behind an error advising the caller to put
+   Chrome on PATH that never consulted PATH.
+5. **Chrome inherited our stdout.** `CreateProcessW` runs with `bInheritHandles = TRUE` and no
+   handle list, and `goto` deliberately leaves Chrome running, so the browser held the write
+   end of the caller's pipe after we exited. Reading a command's output waited for the
+   browser's lifetime instead of the command's: one test sat for 28 minutes.
+6. **`close` never terminated the browser.** `kill_pid` returned `NotABrowser` and signalled
+   nothing, so every invocation leaked a Chrome. It presented as two unrelated test failures,
+   and the giveaway was that the first four browsers in a suite worked and everything after
+   did not.
 
-Plus four tests that asserted Unix spellings: daemon wording, a `file://` URL built with
-backslashes and no third slash, a screenshot path, and a uid carried between two browsers,
-which only ever worked because the ids happened to agree.
+Plus five tests that asserted Unix spellings or depended on a third party: daemon wording, a
+`file://` URL built with backslashes, a screenshot path, a uid carried between two browsers,
+and a fixture server that sent `Connection: close` per redirect hop.
 
-### Windows: known, deliberately not done
+`--no-fail-fast` on the Windows job is what made this tractable. cargo stops at the first
+failing binary, so each round surfaced exactly one defect and the binaries sorting later never
+ran at all.
+
+## Known, deliberately not done
 
 `session::liveness` still answers `Unknown` on Windows, so `prune_dead` never removes an
-entry there. It matters less than it did, because `close` now actually terminates the
-browser and removes its entry, so the store no longer grows from ordinary use; only a
-crashed browser leaves one behind.
+entry there. It matters less than it did, because `close` now terminates the browser and
+removes its entry, so the store no longer grows from ordinary use; only a crashed browser
+leaves one behind.
 
 A `tasklist` implementation was written and taken back out. `prune_dead` calls `liveness`
-once per entry on every save, and a subprocess is ~150ms a call, which is a latency
-regression on every command in exchange for a problem that no longer occurs in normal use.
-Doing it properly means `OpenProcess`/`GetExitCodeProcess`, including the
-`ERROR_ACCESS_DENIED` case that mirrors Unix `EPERM`.
+once per entry on every save, and a subprocess is ~150ms a call: a latency regression on
+every command in exchange for a problem that no longer occurs in normal use. Doing it
+properly means `OpenProcess`/`GetExitCodeProcess`, including the `ERROR_ACCESS_DENIED` case
+that mirrors Unix `EPERM`.
 
-### Windows: what is still failing
-
-Two tests in `read_back_verdict_tests`, both downstream of `goto read_back_kinds.html`
-failing on that platform while other fixtures load. Not yet diagnosed.
-
-The trend across rounds is 372, 414, 485, 514, 538 passing, each round fixing a real defect
-and reaching further. Windows is much closer to working than it has ever been and is not
-finished. Until those two pass, treat Windows as usable at your own risk rather than
-supported.
-
-### Still untested
+## Still untested
 
 `--stealth`, `--connect`, `--copy-cookies`, downloads and PDF against real sites, iframes on
-real pages, and the npm packaging path. `aarch64` on either Linux or macOS, both of which are
-shipped targets.
+real pages, and the npm packaging path.
+
+`aarch64-apple-darwin` and `aarch64-unknown-linux-musl` are shipped targets that no test has
+run on. The macOS job uses `macos-14`, which is ARM, so that target is covered by proxy;
+`aarch64-unknown-linux-musl` is not covered at all.
+
+One green run on a platform is not the same as a stable one. Windows has been green once.

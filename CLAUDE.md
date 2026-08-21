@@ -1,8 +1,9 @@
 # chrome-agent v0.12.0
 
 > **This is a fork and we do not track upstream.** Forked from `sderosiaux/chrome-agent` at
-> `b904691`. Six correctness fixes and one refactor since; merges from upstream will
-> conflict and that is accepted. Divergences are marked **FORK** below, and the full record
+> `b904691`. Ten correctness fixes and one refactor since, six of them Windows defects that
+> meant the tool could never open a page on a platform it ships for; merges from upstream
+> will conflict and that is accepted. Divergences are marked **FORK** below, and the full record
 > including verification status and known gaps is in [`docs/FORK.md`](docs/FORK.md).
 
 Single Rust binary for browser automation via CDP. Built for AI agents.
