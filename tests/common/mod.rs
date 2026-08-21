@@ -100,9 +100,24 @@ pub fn fixture_path(name: &str) -> PathBuf {
 }
 
 /// `file://` URL of a fixture, asserted to exist.
+///
+/// Not `format!("file://{}", path.display())`. That is correct on Unix only by accident: the
+/// path already starts with `/`, so the two slashes plus the root make the three a file URL
+/// needs. On Windows the same expression produced
+/// `file://D:\a\chrome-agent\...\press_keys.html`, which is not a URL Chrome will load:
+/// the drive letter lands where the authority belongs and the separators are backslashes.
+///
+/// Every browser test navigates through this, so on Windows every one of them was aimed at
+/// an unloadable address.
 #[must_use]
 pub fn fixture_url(name: &str) -> String {
-    format!("file://{}", fixture_path(name).display())
+    let path = fixture_path(name).display().to_string().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        // `D:/a/...` needs the third slash that a rooted Unix path brings with it.
+        format!("file:///{path}")
+    }
 }
 
 /// Path to the `chrome-agent` binary under test, as a string.
