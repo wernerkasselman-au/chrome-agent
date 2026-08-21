@@ -110,7 +110,18 @@ async fn main() {
         }
     });
 
-    if let Err(e) = run::run(cli).await {
+    // `Box::pin`, and the reason is the platform, not style. `run` awaited directly puts its
+    // whole future in main's frame, and `run.rs` documents that frame as summing to ~527 KB of
+    // MIR locals across a 40-arm match. Linux gives the main thread 8 MiB and never noticed.
+    // Windows gives it 1 MiB, and every invocation died before doing anything:
+    //
+    //   thread 'main' has overflowed its stack
+    //   exit code -1073741571  (0xC00000FD, STATUS_STACK_OVERFLOW)
+    //
+    // Found the first time CI ran the suite on Windows, which was only possible once the test
+    // code compiled there at all. Boxing moves the future to the heap and leaves a pointer in
+    // the frame, for one allocation per process on a path that is about to do network I/O.
+    if let Err(e) = Box::pin(run::run(cli)).await {
         // Same window, reached by returning rather than by signal: the launch succeeds and
         // then `CdpClient::connect` or `resolve_page_target` fails, so the browser is up and
         // the store never learned its pid. A browser that DID reach the store is left alone
