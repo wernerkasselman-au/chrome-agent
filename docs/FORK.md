@@ -112,31 +112,58 @@ triggered without inventing a commit.
 | --- | --- |
 | Linux (`ubuntu-24.04`) | 608 tests, 40 binaries, **0 skips** under `CHROME_AGENT_REQUIRE_CHROME=1` |
 | macOS (`macos-14`) | green on its first run, full suite including browser tests |
-| Windows (`windows-2022`) | 372 unit tests green. Browser tests excluded, see below |
+| Windows (`windows-2022`) | 538 tests passing, 2 failing. Browser automation works; see below |
 
 Also verified on Linux: `clippy --all-targets -- -D warnings` clean with pedantic and
 nursery, the static musl artifact builds and links statically and drives a live site, and a
 61-command pipe session against a live site with no drift. `clippy` is clean for
-`x86_64-pc-windows-msvc` too.
+`x86_64-pc-windows-msvc` too. All three jobs install the jsdom suite and set
+`CHROME_AGENT_REQUIRE_CHROME`, so a skip fails rather than passing.
 
-The `FileLock` change is now observed rather than reasoned.
+The `FileLock` change is observed rather than reasoned.
 `concurrent_saves_under_lock_lose_no_updates` (24 threads, load-modify-save, assert no lost
 update) passes on Windows, and could not have before: the non-Unix arm was an empty struct
-returning `Ok(())`. It needs no browser, so it runs in the selection above.
+returning `Ok(())`.
 
-### Open: browser automation on Windows
+### Windows: what was actually wrong
 
-Once Chrome became discoverable, `action_report_tests` hung. It started at 05:21:02 and the
-job was still inside it when the 30 minute cap cut at 05:49, on one test that never reported.
-That is a hang, not slowness.
+Six defects, each hidden by the one above it. Three were shipped, not test problems.
 
-The Windows job therefore runs unit tests only. The narrowing is deliberate: the alternative
-is a job that is red forever, or one "fixed" by raising the timeout until it looks green,
-which is the kind of green this fork exists to stop trusting. Restore the full `cargo test`
-line, with `CHROME_AGENT_REQUIRE_CHROME`, when the hang is fixed.
+1. **The test suite did not compile.** Two pieces of Unix-only test code were never gated,
+   and either takes the whole binary down. Nothing had ever run.
+2. **The binary stack-overflowed on startup.** `run.rs` documents its dispatch frame as
+   ~527 KB of MIR locals; Windows gives the main thread 1 MiB against Linux's 8 MiB. Every
+   invocation died, `--version` included. Boxing the future does not fix it, because the
+   value is materialised on the stack before the move; the runtime now runs on a thread whose
+   stack size we choose.
+3. **`chrome_available()` looked for `google-chrome` with `which`.** Neither exists on
+   Windows, so every browser test skipped, and a skip prints with `eprintln!` which cargo
+   hides for a test it counts as passing. Invisible until `CHROME_AGENT_REQUIRE_CHROME`.
+4. **`browser.rs` could not find Chrome.** Its only Windows candidate was `chrome.exe` as a
+   relative path, with the PATH lookup gated to Linux, behind an error advising the caller to
+   put Chrome on PATH that never consulted PATH.
+5. **Chrome inherited our stdout, so reading a command's output waited for the browser.**
+   `CreateProcessW` runs with `bInheritHandles = TRUE` and no handle list, so every
+   inheritable handle passes to the child, and `goto` deliberately leaves Chrome running.
+   The reader never saw EOF: one test sat for 28 minutes. Unix cannot reach this because Rust
+   creates its pipe descriptors close-on-exec.
+6. **The fixture HTTP server reset connections instead of closing them.** Dropping a socket
+   with anything queued is an abortive close on Windows, which Chrome reports as
+   `net::ERR_SOCKET_NOT_CONNECTED` against the navigation about to use it.
 
-Until then Windows is **not** a supported platform for driving a browser, whatever
-`release.yml` implies. Either that gets fixed or the target should stop being published.
+Plus four tests that asserted Unix spellings: daemon wording, a `file://` URL built with
+backslashes and no third slash, a screenshot path, and a uid carried between two browsers,
+which only ever worked because the ids happened to agree.
+
+### Windows: what is still failing
+
+Two tests in `read_back_verdict_tests`, both downstream of `goto read_back_kinds.html`
+failing on that platform while other fixtures load. Not yet diagnosed.
+
+The trend across rounds is 372, 414, 485, 514, 538 passing, each round fixing a real defect
+and reaching further. Windows is much closer to working than it has ever been and is not
+finished. Until those two pass, treat Windows as usable at your own risk rather than
+supported.
 
 ### Still untested
 
