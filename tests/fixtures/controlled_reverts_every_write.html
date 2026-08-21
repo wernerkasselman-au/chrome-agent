@@ -1,0 +1,19 @@
+<!doctype html>
+<html><body>
+<!-- A controlled component of each kind: every write is snapped back one tick later, which is
+     inside READ_BACK_MS. The three read-back verbs must answer about it in the same shape. -->
+<input id="txt" type="text">
+<select id="sel"><option value="x">X</option><option value="y">Y</option></select>
+<input id="cb" type="checkbox">
+<script>
+document.getElementById('txt').addEventListener('input', function () {
+  setTimeout(() => { this.value = ''; }, 10);
+});
+document.getElementById('sel').addEventListener('change', function () {
+  setTimeout(() => { this.selectedIndex = 0; }, 10);
+});
+document.getElementById('cb').addEventListener('change', function () {
+  setTimeout(() => { this.checked = false; }, 10);
+});
+</script>
+</body></html>

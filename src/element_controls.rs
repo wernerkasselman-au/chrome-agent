@@ -117,10 +117,23 @@ fn select_outcome(result: &serde_json::Value) -> Result<SelectOutcome, ElementEr
                 format!("\"{requested}\""),
             )
         };
-        return Err(ElementError::Action(format!(
-            "The page reverted the selection to {held} within {}ms; {asked} did not stick.",
-            crate::element::READ_BACK_MS
-        )));
+        // The measurement rides along with the refusal. Rebuilding the outcome with
+        // `kept: false` rather than inventing a shape keeps one definition of what a
+        // selection read-back looks like, in `read_back::select_report`.
+        let refused = SelectOutcome {
+            text: requested.to_string(),
+            actual,
+            kept: false,
+            secret,
+            observed_after_ms: crate::element::READ_BACK_MS,
+        };
+        return Err(ElementError::NotKept {
+            message: format!(
+                "The page reverted the selection to {held} within {}ms; {asked} did not stick.",
+                crate::element::READ_BACK_MS
+            ),
+            report: crate::read_back::select_report(&refused),
+        });
     }
     Ok(SelectOutcome {
         text: requested.to_string(),
@@ -402,10 +415,24 @@ pub async fn set_checked(
                 )
             },
         );
-        return Err(ElementError::Action(format!(
+        // The refusal is unchanged; what it now carries is the measurement behind it, so
+        // `check` answers with the same `not_kept` / `value` shape a reverted fill does
+        // instead of putting the same fact in prose. See `ElementError::NotKept`.
+        let message = format!(
             "uid={uid} is still {} after the click; {received}.",
             state_word(&after.state)
-        )));
+        );
+        let refused = crate::element::CheckOutcome::acted(
+            message.clone(),
+            dispatched.delivery,
+            desired,
+            &after.state,
+        );
+        let (_, report) = crate::read_back::check_report(refused);
+        return Err(ElementError::NotKept {
+            message,
+            report: report.unwrap_or_else(|| serde_json::json!({})),
+        });
     }
     Ok(CheckOutcome::acted(
         format!("{} uid={uid}", if desired { "Checked" } else { "Unchecked" }),
@@ -490,10 +517,23 @@ pub async fn set_checked_selector(
         )),
         // `state_word`, not the probe's own token: the same reading is reported as
         // `value.actual` on the success path, and one state must not have two spellings.
-        other => Err(ElementError::Action(format!(
-            "selector '{selector}' is still {} after the click; the page did not accept the change.",
-            state_word(other)
-        ))),
+        other => {
+            let message = format!(
+                "selector '{selector}' is still {} after the click; the page did not accept the change.",
+                state_word(other)
+            );
+            let refused = crate::element::CheckOutcome::acted(
+                message.clone(),
+                crate::verdict::Delivery::JsDispatch,
+                desired,
+                other,
+            );
+            let (_, report) = crate::read_back::check_report(refused);
+            Err(ElementError::NotKept {
+                message,
+                report: report.unwrap_or_else(|| serde_json::json!({})),
+            })
+        }
     }
 }
 

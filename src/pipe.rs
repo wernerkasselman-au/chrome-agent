@@ -322,6 +322,27 @@ async fn dispatch(
     match result {
         Ok(v) => v,
         Err(e) => {
+            // A read-back that disagreed is a measurement, not a transport failure. Letting
+            // it through as a response is what gives `select` the contract `fill` already
+            // has: `not_kept` / `value_reverted` with a `value` object and a `next` token,
+            // instead of the same fact as prose in `error`. The refusal is unchanged; only
+            // the shape of the answer is.
+            if let Some(crate::element::ElementError::NotKept { message, report }) =
+                e.downcast_ref::<crate::element::ElementError>()
+            {
+                // `report` is the set of fields to merge, not a `value` object:
+                // `select_report` puts `observed_after_ms` at the top level on purpose,
+                // because the window covers the whole action. Nesting it would hide
+                // `value.verbatim` one level down, where `postcondition_from_response`
+                // does not look, and the verdict would fall through to `unchanged`.
+                let mut refused = json!({"ok": false, "error": message});
+                if let (Some(target), Some(fields)) = (refused.as_object_mut(), report.as_object()) {
+                    for (key, field) in fields {
+                        target.insert(key.clone(), field.clone());
+                    }
+                }
+                refused
+            } else {
             let msg = e.to_string();
             let mut obj = json!({"ok": false, "error": msg});
             if moved_baseline {
@@ -329,6 +350,7 @@ async fn dispatch(
             }
             if let Some(h) = error_hint(&msg, browser_name) { obj["hint"] = json!(h); }
             return obj;
+            }
         }
     }
     };

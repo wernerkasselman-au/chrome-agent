@@ -588,6 +588,23 @@ pub enum ElementError {
     NotInteractable(String),
     #[error("{0}")]
     Action(String),
+    /// A read-back that disagreed with what was asked for.
+    ///
+    /// Carries the same `value` object a fill puts on its response, because it is the same
+    /// measurement: the element was written, read back through `READ_BACK_MS`, and held
+    /// something else. `select` and `check` refuse in that case rather than reporting
+    /// success, and the refusal is right; what was missing is that the refusal threw the
+    /// measurement away, so the response was prose where `fill`'s is `not_kept` /
+    /// `value_reverted` with a `value` object and a `next` token.
+    ///
+    /// The dispatchers recognise this variant and let it through as a response instead of a
+    /// transport failure, so the verdict machinery classifies it the way it classifies a
+    /// reverted fill.
+    #[error("{message}")]
+    NotKept {
+        message: String,
+        report: serde_json::Value,
+    },
 }
 
 /// Click at explicit (x, y) coordinates using Input.dispatchMouseEvent.
