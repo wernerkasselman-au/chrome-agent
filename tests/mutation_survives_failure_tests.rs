@@ -16,7 +16,7 @@ use std::process::Command;
 use serde_json::Value;
 
 mod common;
-use common::{binary, run_cli};
+use common::{binary, run_cli, PipeSession};
 
 struct TestBrowser(String);
 impl TestBrowser {
@@ -44,49 +44,6 @@ fn textbox_uids(inspect: &Value) -> Vec<String> {
         .filter_map(|l| l.split("uid=").nth(1)?.split_whitespace().next())
         .map(str::to_string)
         .collect()
-}
-
-/// One live pipe session, driven a command at a time.
-///
-/// The uid-targeted tests need the uids from an `inspect` before they can compose the next
-/// command, and a uid is only good inside the document it was read from. Sending everything
-/// up front and reading at the end cannot do that: a second session re-navigates, and the
-/// backendNodeId counters land somewhere else.
-struct PipeSession {
-    child: std::process::Child,
-    out: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
-}
-
-impl PipeSession {
-    fn start(browser: &str) -> Self {
-        use std::io::BufRead;
-        let mut child = Command::new(binary())
-            .args(["--browser", browser, "--timeout", "3", "pipe"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn pipe");
-        let out = std::io::BufReader::new(child.stdout.take().expect("pipe stdout")).lines();
-        Self { child, out }
-    }
-
-    /// Send one command and return its response.
-    fn send(&mut self, line: &str) -> Value {
-        use std::io::Write;
-        let stdin = self.child.stdin.as_mut().expect("pipe stdin");
-        writeln!(stdin, "{line}").expect("write pipe command");
-        stdin.flush().expect("flush pipe command");
-        let raw = self.out.next().expect("a response line").expect("readable response");
-        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("not JSON ({e}): {raw}"))
-    }
-}
-
-impl Drop for PipeSession {
-    fn drop(&mut self) {
-        drop(self.child.stdin.take());
-        let _ = self.child.wait();
-    }
 }
 
 /// Drive a pipe session and return one parsed response per input line.

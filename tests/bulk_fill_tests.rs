@@ -100,34 +100,32 @@ fn fill_form_by_uid_reports_each_outcome() {
         return;
     }
     let url = common::fixture_url("multi_field_form.html");
-    let probe = "JSON.stringify([...document.querySelectorAll('#name,#phone')].map(e => e.id))";
-    let script = format!(
-        "{}\n{}\n{}\n",
-        serde_json::json!({"cmd": "goto", "url": url}),
-        serde_json::json!({"cmd": "inspect"}),
-        serde_json::json!({"cmd": "eval", "expression": probe}),
-    );
-    let responses = run_pipe("bulk-fill-probe", &script);
-    let snapshot = responses[1]["snapshot"].as_str().unwrap_or_default().to_string();
-    let uid_of = |name: &str| -> String {
-        snapshot
-            .lines()
-            .find(|l| l.contains("textbox") && l.contains(name))
-            .and_then(|l| l.trim_start().strip_prefix("uid="))
-            .and_then(|rest| rest.split_whitespace().next())
-            .unwrap_or_else(|| panic!("no uid for {name} in: {snapshot}"))
-            .to_string()
-    };
-    let phone_uid = uid_of("Phone");
 
-    let script = format!(
-        "{}\n{}\n{}\n",
-        serde_json::json!({"cmd": "goto", "url": url}),
-        serde_json::json!({"cmd": "inspect"}),
-        serde_json::json!({"cmd": "fill_form", "pairs": [{"uid": phone_uid, "value": "5551234567"}]}),
+    // One session for both halves, deliberately. This used to probe in `bulk-fill-probe` and
+    // act in `bulk-fill-uid`, which are two browsers and two documents: `run_pipe` purges the
+    // browser when it returns. A uid is a `backendNodeId` and means nothing outside the
+    // document it was read from, so carrying one across was only ever working by coincidence.
+    // The ids agreed on Linux and did not on Windows, where the test failed with
+    // `Element uid=n5 not found`.
+    let browser = TestBrowser::new("bulk-fill-uid");
+    let mut pipe = common::PipeSession::start(browser.name());
+    pipe.send(&serde_json::json!({"cmd": "goto", "url": url}).to_string());
+    let snapshot = pipe.send(&serde_json::json!({"cmd": "inspect"}).to_string())["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let phone_uid = snapshot
+        .lines()
+        .find(|l| l.contains("textbox") && l.contains("Phone"))
+        .and_then(|l| l.trim_start().strip_prefix("uid="))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no uid for Phone in: {snapshot}"))
+        .to_string();
+
+    let last = pipe.send(
+        &serde_json::json!({"cmd": "fill_form", "pairs": [{"uid": phone_uid, "value": "5551234567"}]})
+            .to_string(),
     );
-    let responses = run_pipe("bulk-fill-uid", &script);
-    let last = responses.last().expect("a fill_form response");
     let values = last["values"].as_array().unwrap_or_else(|| panic!("no per-field report: {last}"));
     assert_eq!(values.len(), 1, "{last}");
     assert_eq!(values[0]["uid"], phone_uid, "{last}");

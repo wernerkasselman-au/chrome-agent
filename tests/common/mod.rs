@@ -187,3 +187,52 @@ pub fn run_cli_full(args: &[&str]) -> (String, String, i32) {
         output.status.code().unwrap_or(-1),
     )
 }
+
+/// One live pipe session, driven a command at a time.
+///
+/// Needed whenever a test must read one response before it can compose the next command,
+/// which is every uid-targeted test: a uid is a `backendNodeId` and is only meaningful
+/// inside the document it was read from. Probing in one `run_pipe` and acting in another
+/// looks right and is not: those are two browsers and two documents, and the ids agreeing
+/// is a coincidence that held on Linux and did not on Windows.
+///
+/// The uid-targeted tests need the uids from an `inspect` before they can compose the next
+/// command, and a uid is only good inside the document it was read from. Sending everything
+/// up front and reading at the end cannot do that: a second session re-navigates, and the
+/// backendNodeId counters land somewhere else.
+pub struct PipeSession {
+    child: std::process::Child,
+    out: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
+}
+
+impl PipeSession {
+    pub fn start(browser: &str) -> Self {
+        use std::io::BufRead;
+        let mut child = Command::new(binary())
+            .args(["--browser", browser, "--timeout", "3", "pipe"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn pipe");
+        let out = std::io::BufReader::new(child.stdout.take().expect("pipe stdout")).lines();
+        Self { child, out }
+    }
+
+    /// Send one command and return its response.
+    pub fn send(&mut self, line: &str) -> serde_json::Value {
+        use std::io::Write;
+        let stdin = self.child.stdin.as_mut().expect("pipe stdin");
+        writeln!(stdin, "{line}").expect("write pipe command");
+        stdin.flush().expect("flush pipe command");
+        let raw = self.out.next().expect("a response line").expect("readable response");
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("not JSON ({e}): {raw}"))
+    }
+}
+
+impl Drop for PipeSession {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.wait();
+    }
+}
