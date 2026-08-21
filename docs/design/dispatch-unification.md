@@ -5,17 +5,20 @@ today, what the defect actually is, and a staged route with the invariants that 
 move. Nothing here is a request to redesign behaviour. Every response shape stays byte for
 byte what it is.
 
-**What is built**: two dispatch surfaces over one set of command modules. `run.rs::run`
-matches a typed `Command` enum across 41 arms. `pipe_dispatch.rs::dispatch_single` matches
-a `&str` pulled out of a JSON object. Both funnel into `src/commands/`. A third list,
-`pipe_report::mutates_page`, keys off the same strings a third time.
+**What is built**: four dispatcher matches over one set of command modules, plus a
+classification list. `run.rs` matches the typed `Command` enum twice, at `src/run.rs:20`
+(the commands that answer before a browser connection) and `src/run.rs:227` (the rest).
+`pipe.rs::dispatch` (`src/pipe.rs:237`) and `pipe_dispatch.rs::dispatch_single`
+(`src/pipe_dispatch.rs:740`) each match a `&str` pulled out of a JSON object, and differ by
+one arm. All four funnel into `src/commands/`. `pipe_report::mutates_page` keys off the
+same strings again.
 
 **What is not**: any single place where adding a command is one edit the compiler checks.
 
 ## The defect is drift, not duplication
 
-Duplication is the symptom and it is survivable. The defect is that nothing connects the
-three lists, so they can disagree silently, and they already do.
+Duplication is the symptom and it is survivable. The defect is that nothing connects those
+five lists, so they can disagree silently, and they already do.
 
 `mutates_page` classifies `tap`, `double_click` and `double-click` as page-mutating.
 `dispatch_single` has no arm for any of them. Measured against the built binary:
@@ -31,14 +34,19 @@ $ echo '{"cmd":"double_click","uid":"n1"}' | chrome-agent pipe
 Those three entries are unreachable. That is the harmless direction, and it is harmless by
 luck rather than by construction. The same gap the other way round, a dispatcher alias
 absent from `mutates_page`, silently turns the change report off for that spelling: the
-command runs, answers `ok:true`, and carries no `changed`, no `delta` and no verdict. It
-would look exactly like `--verdict off`, which is the ambiguity `verdict.rs` exists to
-remove.
+command runs, answers `ok:true`, and carries no `changed`, no `delta` and no verdict.
+
+It does **not** look like `--verdict off`. A classified command with reporting off still
+gets `not_checked` / `reporting_disabled` (`src/pipe.rs:295`). An unclassified one gets no
+verdict field at all, which is how a read answers, so the response is a mutating command
+wearing the shape of `inspect`. A different false claim, equally worth preventing.
 
 `fill-form` / `fill_form` / `fillform` and `fill_and_submit` / `fill-and-submit` are
-currently spelled correctly in both places. Six strings, maintained twice, by hand.
+currently spelled correctly everywhere. Five spellings, hand-maintained across three
+matches (`src/pipe.rs:254` and `:274`, `src/pipe_dispatch.rs:768` and `:775`,
+`src/pipe_report.rs:233` and `:234`).
 
-## What holds the two surfaces together today
+## What holds the surfaces together today
 
 Tests. There is a named parity test for each behaviour the split could break:
 
@@ -65,20 +73,22 @@ somebody thought of. `tap` is what the gap looks like when nobody thought of it.
 serde derive beside the clap derive and let pipe parse into the same type:
 
 ```rust
-#[derive(Parser, Deserialize)]
+#[derive(Subcommand, Deserialize)]          // Subcommand, not Parser: src/cli.rs:148
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command { ... }
 ```
 
-`{"cmd":"click","uid":"n1"}` then deserializes to `Command::Click { uid: Some("n1"), .. }`,
+`{"cmd":"click","uid":"n1"}` would then deserialize to `Command::Click { uid: Some("n1"), .. }`,
 and three things follow:
 
 1. **One dispatcher.** Argument extraction, defaults and response shaping happen once.
 2. **`mutates_page` becomes an exhaustive method** on `Command`. A new variant nobody
    classifies is a compile error, not a silent `false`.
-3. **Aliases live once, on the variant.** `#[command(alias = "tap")]` and
-   `#[serde(alias = "tap")]` sit on the same line of the same enum. The drift above becomes
-   unrepresentable.
+3. **Aliases move next to each other.** `#[command(alias = "tap")]` and
+   `#[serde(alias = "tap")]` sit on the same variant. Note the limit: two independent
+   attributes can still be edited one at a time, so this makes drift visible in review
+   rather than unrepresentable. Only a single generated vocabulary does the stronger thing,
+   which is what `verb-vocabulary.md` proposes for the JSON side.
 
 ### Why this direction
 
@@ -98,15 +108,26 @@ revertible.
 every command name `dispatch_single` accepts deserializes into the variant it currently
 routes to, and that the six CLI-only commands (`close`, `daemon`, `pipe`, `replay`,
 `status`, `stop`) are refused by pipe exactly as they are today. This proves the mapping is
-total *before* anything moves, and it closes the `tap` class of gap permanently.
+total *before* anything moves.
 
-This slice is worth landing on its own merits even if nothing after it is built.
+It does **not** close the `tap` class of gap. A test over the names `dispatch_single`
+accepts can never examine `tap`, because `tap` is exactly a name it does not accept.
+Catching a dead classification requires starting from `mutates_page` and asking whether
+each spelling dispatches. `verb-vocabulary.md` covers that direction.
+
+This slice is still worth landing on its own merits even if nothing after it is built.
 
 **Slice 1, pipe parses into `Command`.** `dispatch_single` deserializes, then calls the
 existing per-command dispatchers with typed arguments. The string match is gone; both
 dispatcher bodies remain.
 
 **Slice 2, `mutates_page` becomes an exhaustive method.** Deletes the third list.
+
+Slice 2 does not actually need slices 0 and 1, and it is where the only silent failure in
+this document lives. `verb-vocabulary.md` pulls it out as a standalone change: a canonical
+`PipeVerb` enum that both JSON dispatch matches and the classification match on
+exhaustively, needing none of the clap and serde reconciliation that makes the rest of this
+expensive. If only one thing here is ever built, build that.
 
 **Slice 3, collapse the dispatcher bodies one family at a time**, ordered by blast radius:
 read-only commands first (`inspect`, `text`, `read`, `tabs`, `diff`), then targeted
@@ -124,10 +145,14 @@ These are contracts, and no slice may move them. Each already has a test.
   through the error channel and `main` recognises it before its generic handler.
 - `goto` stays out of `mutates_page` and out of the verdict machinery. `landed` is
   self-describing.
-- The `value:{}` object has exactly one key, because `postcondition_from_response` reads
-  exactly one. A second key for the same idea is a second reader that can fall out of step.
-- `--verdict off` skips the post-action read entirely and restores the pre-0.8 output and
-  latency.
+- A response carries exactly one top-level `value` key, because
+  `postcondition_from_response` reads exactly one. A second key for the same idea is a
+  second reader that can fall out of step. (The object itself has several members:
+  `requested`, `actual`, `verbatim`, `observed_after_ms`, and `caveat`. See
+  `src/read_back.rs`.)
+- `--verdict off` skips the post-action read entirely and restores the pre-0.8 latency. It
+  does not restore the pre-0.8 output shape: a classified command still answers
+  `not_checked` / `reporting_disabled` (`src/pipe.rs:295`).
 - A failed post-action read is not a failed action. Pipe stated this policy first and the
   CLI was aligned to it; the merged path keeps pipe's.
 - Text and JSON output shapes, including which lines text mode prints only when the page
@@ -142,6 +167,20 @@ These are contracts, and no slice may move them. Each already has a test.
   compiler-checked, but it is the bulk of the diff.
 - **Commands pipe must refuse.** Six variants have no pipe meaning. They need an explicit
   guard plus the Slice 0 test, not a silent fallthrough.
+- **The two shapes diverge more than "one serde derive" implies, and this is the risk that
+  could sink the whole proposal.** Verified against the code: `navigate_and_read` and
+  `fill_and_submit` exist in pipe (`src/pipe.rs:273`) with no `Command` variant at all;
+  CLI `fill-form` takes positional `uid=value` strings (`src/cli.rs:207`) where pipe takes
+  an array of `{uid,value}` objects (`src/pipe_dispatch_actions.rs:89`); CLI `Batch` carries
+  `stop_on_error` and reads stdin (`src/cli.rs:589`) where pipe's carries a `commands` array
+  (`src/pipe_dispatch.rs:688`); CLI `assert` is a clap subcommand enum (`src/cli.rs:493`)
+  where pipe parses a flattened shape (`src/pipe_dispatch_actions.rs:281`). Even the worked
+  example above does not deserialize as written, because `Click.inspect` is a required
+  `bool` with no `#[serde(default)]` (`src/cli.rs:180`).
+
+  Slice 0 exists to measure exactly this, and it may well report that the shapes are too
+  far apart to merge. If so, the honest conclusion is two request types converting into one
+  shared operation enum, rather than the clap syntax tree serving as the wire schema.
 - **Unknown-field policy.** `deny_unknown_fields` would make pipe stricter than it is now.
   Decide deliberately; tolerating extra keys may be the kinder contract for an agent, and
   either way it is a behaviour change and belongs in its own slice.
