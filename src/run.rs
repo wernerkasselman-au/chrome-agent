@@ -1,28 +1,60 @@
 use serde_json::json;
 
 use crate::BoxError;
+use crate::pipe_verb::PipeVerb;
 use crate::browser::{self, BrowserOptions};
 use crate::cdp::client::CdpClient;
 use crate::cli::{Cli, Command, DaemonAction};
 use crate::run_helpers::{ReportPolicy, check_report, cmd_close, cmd_purge_orphans, cmd_status, cmd_stop, connect_page, get_uid_map, json_output, kill_pid, output_action, output_action_with, output_goto, resolve_page_target};
 use crate::{commands, pipe, session};
 
-/// Commands that can move the page and do not answer for it, so the stored baseline stops
-/// describing the page the moment they run.
+/// The verb a CLI command speaks on the JSON surfaces, where one exists.
 ///
-/// The CLI mirror of `pipe_report::invalidates_baseline`, matching on the typed enum rather
-/// than on a JSON object. The two lists have to agree, and today they are kept in step by
-/// hand; `docs/design/verb-vocabulary.md` is about removing exactly that class of hand-kept
-/// agreement.
-const fn invalidates_baseline(command: &Command) -> bool {
-    match command {
-        Command::Eval { .. } => true,
-        // Only when it was asked to scroll: a plain extract moves nothing, and clearing there
-        // would cost every caller a change report to fix a claim nobody made.
-        Command::Extract { scroll, .. } => *scroll,
-        _ => false,
-    }
+/// The point of the mapping is that the classifications live in exactly one place. Before
+/// this, `run.rs` carried its own copy of "which commands leave the baseline behind", kept in
+/// step with `pipe_report`'s by hand, which is the drift this whole exercise removes.
+///
+/// `None` for the commands that have no JSON spelling: process and session management
+/// (`close`, `daemon`, `pipe`, `replay`, `status`, `stop`), which cannot move a page.
+const fn verb_of(command: &Command) -> Option<PipeVerb> {
+    Some(match command {
+        Command::Assert { .. } => PipeVerb::Assert,
+        Command::Back => PipeVerb::Back,
+        Command::Batch { .. } => PipeVerb::Batch,
+        Command::Check { .. } => PipeVerb::Check,
+        Command::Click { .. } => PipeVerb::Click,
+        Command::Console { .. } => PipeVerb::Console,
+        Command::Dblclick { .. } => PipeVerb::Dblclick,
+        Command::Diff => PipeVerb::Diff,
+        Command::Download { .. } => PipeVerb::Download,
+        Command::Drag { .. } => PipeVerb::Drag,
+        Command::Eval { .. } => PipeVerb::Eval,
+        Command::Extract { .. } => PipeVerb::Extract,
+        Command::Fill { .. } => PipeVerb::Fill,
+        Command::FillForm { .. } => PipeVerb::FillForm,
+        Command::Forward { .. } => PipeVerb::Forward,
+        Command::Frame { .. } => PipeVerb::Frame,
+        Command::Goto { .. } => PipeVerb::Goto,
+        Command::History { .. } => PipeVerb::History,
+        Command::Hover { .. } => PipeVerb::Hover,
+        Command::Inspect { .. } => PipeVerb::Inspect,
+        Command::Network { .. } => PipeVerb::Network,
+        Command::Pdf { .. } => PipeVerb::Pdf,
+        Command::Press { .. } => PipeVerb::Press,
+        Command::Read { .. } => PipeVerb::Read,
+        Command::Screenshot { .. } => PipeVerb::Screenshot,
+        Command::Scroll { .. } => PipeVerb::Scroll,
+        Command::Select { .. } => PipeVerb::Select,
+        Command::Tabs => PipeVerb::Tabs,
+        Command::Text { .. } => PipeVerb::Text,
+        Command::Type { .. } => PipeVerb::Type,
+        Command::Uncheck { .. } => PipeVerb::Uncheck,
+        Command::Upload { .. } => PipeVerb::Upload,
+        Command::Wait { .. } => PipeVerb::Wait,
+        _ => return None,
+    })
 }
+
 
 /// The biggest awaited futures in this function are `Box::pin`ned before being awaited.
 ///
@@ -268,7 +300,13 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
         page.last_snapshot_loader = l;
         page.baseline_moved = false;
     }
-    if invalidates_baseline(&cli.command) {
+    // The CLI has no JSON object to read `--scroll` from, so it builds the one field the
+    // classification looks at. Same question, same answer, one implementation.
+    let cli_args = match &cli.command {
+        Command::Extract { scroll, .. } => json!({"scroll": scroll}),
+        _ => json!({}),
+    };
+    if verb_of(&cli.command).is_some_and(|v| v.invalidates_baseline(&cli_args)) {
         crate::pipe_report::mark_baseline_moved(&mut store, &cli.browser, &cli.page);
     }
     let _ = session::save_session(&mut store);

@@ -223,44 +223,6 @@ pub fn attach_verdict_for(
     assessment
 }
 
-/// Commands that can move the page and do not answer for it.
-///
-/// `eval` runs caller-supplied JavaScript, so it can click, submit, or rewrite the DOM. It
-/// is deliberately not in `mutates_page`: a change report costs a `settle` plus a tree read
-/// (measured at ~100ms against ~10ms for the eval itself), and `eval` is also the documented
-/// way to pull structured data out of a page. Making every read pay for a write is the wrong
-/// trade.
-///
-/// What it must not do is leave a stale baseline behind. Measured: on a page where an `eval`
-/// appended a paragraph, the NEXT command, a click on an inert button, answered
-/// `changed / tree_delta` and quoted that paragraph as its own delta. Not a missing claim, a
-/// false one, about which command caused what.
-///
-/// `goto`, `back` and `forward` keep their baseline on purpose and are safe from this: they
-/// replace the document, so the stored loaderId stops matching and the comparison answers
-/// `document_replaced` rather than believing a diff across two different pages. `eval` leaves
-/// the document identical, which is exactly why the stale diff is taken at face value.
-///
-/// Clearing rather than refreshing: a refreshed baseline would be a claim that the new
-/// snapshot is settled, and settling is the expensive half. The next action answers
-/// `unknown / no_baseline`, which is an admission this vocabulary already has a rung for, and
-/// it stores a fresh baseline as it goes, so only one action pays.
-/// Takes the whole command, not just its name: `extract` only moves the page when it was
-/// asked to scroll, and clearing the baseline for the ordinary read would cost every caller
-/// a report for nothing.
-pub fn invalidates_baseline(cmd: &Value) -> bool {
-    match cmd.get("cmd").and_then(Value::as_str).unwrap_or("") {
-        "eval" => true,
-        // `extract --scroll` drives the page to the bottom to trigger lazy loading and then
-        // scrolls back. The scroll position is restored; the content it loaded is not.
-        // Measured: an `extract` with `scroll` appended two list items, and the next click on
-        // an inert button answered `changed / tree_delta` quoting both of them.
-        "extract" => cmd.get("scroll").and_then(Value::as_bool).unwrap_or(false),
-        // `inspect --scroll` scrolls too and is safe: it writes the snapshot it just took as
-        // the new baseline, so there is nothing stale left behind.
-        _ => false,
-    }
-}
 
 /// Record that the page moved without an action answering for it.
 ///
@@ -287,17 +249,6 @@ pub fn baseline_moved(store: &SessionStore, browser_name: &str, page_name: &str)
         .is_some_and(|p| p.baseline_moved)
 }
 
-/// Commands that can move the page, and therefore owe the caller a change report.
-pub fn mutates_page(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "click" | "tap" | "dblclick" | "double_click" | "double-click"
-            | "fill" | "type" | "press" | "select" | "check" | "uncheck"
-            | "upload" | "drag" | "hover" | "scroll"
-            | "fill-form" | "fill_form" | "fillform"
-            | "fill_and_submit" | "fill-and-submit"
-    )
-}
 
 /// Re-read the page after an action and say what moved, mirroring the CLI default.
 ///

@@ -19,6 +19,7 @@ mod pipe;
 mod pipe_dispatch;
 mod pipe_dispatch_actions;
 mod pipe_report;
+mod pipe_verb;
 mod profiles;
 mod read_back;
 mod render;

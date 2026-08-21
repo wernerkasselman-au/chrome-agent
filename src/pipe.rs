@@ -3,6 +3,7 @@ use std::io::Write as _;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::pipe_verb::PipeVerb;
 use crate::browser::{self, BrowserOptions};
 use crate::cdp::client::CdpClient;
 use crate::commands;
@@ -216,9 +217,12 @@ async fn dispatch(
     report: crate::run_helpers::ReportPolicy, cmd: &Value,
 ) -> Value {
     let cmd_name = cmd.get("cmd").and_then(Value::as_str).unwrap_or("");
+    // Resolved once. Every question below is asked of the identity rather than the spelling,
+    // so an alias cannot be dispatchable and unclassified at the same time.
+    let verb: Option<crate::pipe_verb::PipeVerb> = cmd_name.parse().ok();
     // Same contract as the CLI: an action says what it changed. Capture the baseline first,
     // because a command run with `inspect` refreshes it itself.
-    let baseline = if report.changes && crate::pipe_dispatch::mutates_page(cmd_name) {
+    let baseline = if report.changes && verb.is_some_and(crate::pipe_verb::PipeVerb::requires_change_report) {
         // If a non-reporting command moved the page since the stored snapshot (an `eval`, an
         // `extract --scroll`), that snapshot is no longer a base for THIS action's claim:
         // its changes would be reported as this action's delta. Re-read the page now so the
@@ -261,55 +265,56 @@ async fn dispatch(
     // lazy list into existence and then answered "No repeating pattern found", so a clear
     // placed after the dispatch never ran. Whether the command succeeded is not the question.
     // Whether the stored snapshot still describes the page is, and after this one it does not.
-    let moved_baseline = crate::pipe_report::invalidates_baseline(cmd);
+    let moved_baseline = verb.is_some_and(|v| v.invalidates_baseline(cmd));
     if moved_baseline {
         crate::pipe_report::mark_baseline_moved(store, browser_name, page_name);
     }
     let mut value = {
-    let result: Result<Value, crate::BoxError> = match cmd_name {
-        "goto" => dispatch_goto(client, store, browser_name, page_name, target_id, timeout, global_max_depth, cmd).await,
-        "click" => dispatch_click(client, store, browser_name, page_name, target_id, global_max_depth, report, cmd).await,
-        "fill" => dispatch_fill(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
-        "inspect" => dispatch_inspect(client, store, browser_name, page_name, target_id, cmd).await,
-        "eval" => dispatch_eval(client, cmd).await,
-        "read" => dispatch_read(client, cmd).await,
-        "text" => dispatch_text(client, store, browser_name, page_name, cmd).await,
-        "screenshot" => dispatch_screenshot(client, store, browser_name, page_name, cmd).await,
-        "pdf" => dispatch_pdf(client, cmd).await,
-        "download" => dispatch_download(client, timeout, cmd).await,
-        "wait" => dispatch_wait(client, timeout, cmd).await,
-        "back" => dispatch_back(client).await,
-        "forward" => dispatch_forward(client).await,
-        "scroll" => dispatch_scroll(client, store, browser_name, page_name, cmd).await,
-        "type" => dispatch_type(client, cmd).await,
-        "press" => dispatch_press(client, cmd).await,
-        "fill-form" | "fill_form" | "fillform" => dispatch_fill_form(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
-        "dblclick" => dispatch_dblclick(client, store, browser_name, page_name, target_id, global_max_depth, report, cmd).await,
-        "select" => dispatch_select(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
-        "check" => dispatch_check(client, store, browser_name, page_name, report, cmd).await,
-        "uncheck" => {
+    let result: Result<Value, crate::BoxError> = match verb {
+        None => Err(crate::pipe_dispatch::unknown_cmd_error(cmd_name)),
+        Some(verb) => match verb {
+        PipeVerb::Goto => dispatch_goto(client, store, browser_name, page_name, target_id, timeout, global_max_depth, cmd).await,
+        PipeVerb::Click => dispatch_click(client, store, browser_name, page_name, target_id, global_max_depth, report, cmd).await,
+        PipeVerb::Fill => dispatch_fill(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
+        PipeVerb::Inspect => dispatch_inspect(client, store, browser_name, page_name, target_id, cmd).await,
+        PipeVerb::Eval => dispatch_eval(client, cmd).await,
+        PipeVerb::Read => dispatch_read(client, cmd).await,
+        PipeVerb::Text => dispatch_text(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Screenshot => dispatch_screenshot(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Pdf => dispatch_pdf(client, cmd).await,
+        PipeVerb::Download => dispatch_download(client, timeout, cmd).await,
+        PipeVerb::Wait => dispatch_wait(client, timeout, cmd).await,
+        PipeVerb::Back => dispatch_back(client).await,
+        PipeVerb::Forward => dispatch_forward(client).await,
+        PipeVerb::Scroll => dispatch_scroll(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Type => dispatch_type(client, cmd).await,
+        PipeVerb::Press => dispatch_press(client, cmd).await,
+        PipeVerb::FillForm => dispatch_fill_form(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
+        PipeVerb::Dblclick => dispatch_dblclick(client, store, browser_name, page_name, target_id, global_max_depth, report, cmd).await,
+        PipeVerb::Select => dispatch_select(client, store, browser_name, page_name, target_id, global_max_depth, cmd).await,
+        PipeVerb::Check => dispatch_check(client, store, browser_name, page_name, report, cmd).await,
+        PipeVerb::Uncheck => {
             let mut cmd_with_desired = cmd.clone();
             if let Some(m) = cmd_with_desired.as_object_mut() {
                 m.insert("desired".into(), Value::Bool(false));
             }
             dispatch_check(client, store, browser_name, page_name, report, &cmd_with_desired).await
         }
-        "upload" => dispatch_upload(client, store, browser_name, page_name, cmd).await,
-        "drag" => dispatch_drag(client, store, browser_name, page_name, cmd).await,
-        "hover" => dispatch_hover(client, store, browser_name, page_name, cmd).await,
-        "tabs" => dispatch_tabs(browser_client, store).await,
-        "network" => dispatch_network(client, cmd).await,
-        "console" => dispatch_console(client, cmd).await,
-        "diff" => dispatch_diff(client, store, browser_name, page_name, target_id).await,
-        "extract" => dispatch_extract(client, cmd).await,
-        "navigate_and_read" | "navigate-and-read" => dispatch_navigate_and_read(client, store, browser_name, page_name, target_id, timeout, cmd).await,
-        "fill_and_submit" | "fill-and-submit" => dispatch_fill_and_submit(client, timeout, cmd).await,
-        "history" => dispatch_history(cmd),
-        "frame" => dispatch_frame(client, cmd).await,
-        "assert" => dispatch_assert(client, store, browser_name, page_name, cmd).await,
-        "batch" => dispatch_batch(client, browser_client, store, browser_name, page_name, target_id, timeout, global_max_depth, report, cmd).await,
-        "" => Err("Missing \"cmd\" field".into()),
-        other => Err(format!("Unknown command: {other}").into()),
+        PipeVerb::Upload => dispatch_upload(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Drag => dispatch_drag(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Hover => dispatch_hover(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Tabs => dispatch_tabs(browser_client, store).await,
+        PipeVerb::Network => dispatch_network(client, cmd).await,
+        PipeVerb::Console => dispatch_console(client, cmd).await,
+        PipeVerb::Diff => dispatch_diff(client, store, browser_name, page_name, target_id).await,
+        PipeVerb::Extract => dispatch_extract(client, cmd).await,
+        PipeVerb::NavigateAndRead => dispatch_navigate_and_read(client, store, browser_name, page_name, target_id, timeout, cmd).await,
+        PipeVerb::FillAndSubmit => dispatch_fill_and_submit(client, timeout, cmd).await,
+        PipeVerb::History => dispatch_history(cmd),
+        PipeVerb::Frame => dispatch_frame(client, cmd).await,
+        PipeVerb::Assert => dispatch_assert(client, store, browser_name, page_name, cmd).await,
+        PipeVerb::Batch => dispatch_batch(client, browser_client, store, browser_name, page_name, target_id, timeout, global_max_depth, report, cmd).await,
+    },
     };
 
     // `result` must not outlive this block: BoxError is not Send, and an await with it
@@ -329,7 +334,7 @@ async fn dispatch(
     };
     // `--verdict off` is a decision, not an observation. Saying so costs two fields and no
     // page read, and it is the difference between "I did not look" and "nothing moved".
-    if !report.changes && crate::pipe_dispatch::mutates_page(cmd_name) {
+    if !report.changes && verb.is_some_and(crate::pipe_verb::PipeVerb::requires_change_report) {
         // The hit test still ran: it is part of aiming the action, not part of the report.
         // An intercepted click says so even here, where the page was never re-read.
         crate::pipe_report::attach_verdict_for(
