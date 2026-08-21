@@ -55,16 +55,32 @@ pub fn unavailable_with(require: bool, reason: &str) -> bool {
 /// True when a Chrome binary exists on this machine.
 #[must_use]
 pub fn chrome_available() -> bool {
-    let candidates = if cfg!(target_os = "macos") {
-        vec!["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+    let candidates: Vec<String> = if cfg!(target_os = "macos") {
+        vec!["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string()]
+    } else if cfg!(target_os = "windows") {
+        // Windows used to fall through to the Unix arm and look for `google-chrome` with
+        // `which`, neither of which exists there, so this always answered false. The tests
+        // that gate on it skipped, and a skipped test prints its reason with `eprintln!`,
+        // which cargo captures and never shows for a test it counts as passing. Five tests
+        // were reported green on Windows without running, until
+        // `CHROME_AGENT_REQUIRE_CHROME` turned the skip into the failure it should have been.
+        let mut paths = vec!["chrome.exe".to_string()];
+        for root in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(dir) = std::env::var(root) {
+                paths.push(format!(r"{dir}\Google\Chrome\Application\chrome.exe"));
+            }
+        }
+        paths
     } else {
-        vec!["google-chrome", "chromium"]
+        vec!["google-chrome".to_string(), "chromium".to_string()]
     };
-    for candidate in candidates {
+    // `which` is not a command on Windows.
+    let locator = if cfg!(target_os = "windows") { "where" } else { "which" };
+    for candidate in &candidates {
         if std::path::Path::new(candidate).exists() {
             return true;
         }
-        if Command::new("which").arg(candidate).output().is_ok_and(|o| o.status.success()) {
+        if Command::new(locator).arg(candidate).output().is_ok_and(|o| o.status.success()) {
             return true;
         }
     }
