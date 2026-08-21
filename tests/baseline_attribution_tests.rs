@@ -155,3 +155,43 @@ fn an_extract_that_did_not_scroll_leaves_the_baseline_alone() {
         responses[3]
     );
 }
+
+/// The CLI keeps its baseline in `sessions.json` between invocations, so the same stale
+/// snapshot outlives the process that made it. Measured before the fix: a `click` run as a
+/// separate command after a mutating `eval` answered `changed / tree_delta` and quoted the
+/// eval's paragraph.
+///
+/// A separate code path from the two JSON dispatchers, and it had the same defect.
+#[test]
+fn the_cli_does_not_carry_an_evals_changes_into_the_next_invocation() {
+    if !common::browser_ready() {
+        return;
+    }
+    let browser = TestBrowser::new("cli-attribution");
+    let url = common::fixture_url("eval_mutates_between_actions.html");
+    let b = browser.name();
+
+    assert_eq!(run_cli(&["--browser", b, "goto", &url]).1, 0, "goto");
+    assert_eq!(run_cli(&["--browser", b, "inspect"]).1, 0, "inspect takes the baseline");
+    assert_eq!(
+        run_cli(&[
+            "--browser", b, "eval",
+            "document.getElementById('host').innerHTML = '<p>ADDED_BY_EVAL</p>'; 1",
+        ])
+        .1,
+        0,
+        "eval mutates"
+    );
+
+    let (stdout, code) = run_cli(&["--browser", b, "--json", "click", "--selector", "#inert"]);
+    assert_eq!(code, 0, "the click itself succeeds: {stdout}");
+    let click: Value = serde_json::from_str(&stdout).expect("json response");
+    assert!(
+        !click["delta"].as_str().unwrap_or_default().contains("ADDED_BY_EVAL"),
+        "the click reported the eval's change as its own: {click}"
+    );
+    assert_ne!(
+        click["verdict_reason"], "tree_delta",
+        "an inert click has no tree delta of its own: {click}"
+    );
+}

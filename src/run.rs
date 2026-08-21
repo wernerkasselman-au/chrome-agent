@@ -7,6 +7,23 @@ use crate::cli::{Cli, Command, DaemonAction};
 use crate::run_helpers::{ReportPolicy, check_report, cmd_close, cmd_purge_orphans, cmd_status, cmd_stop, connect_page, get_uid_map, json_output, kill_pid, output_action, output_action_with, output_goto, resolve_page_target};
 use crate::{commands, pipe, session};
 
+/// Commands that can move the page and do not answer for it, so the stored baseline stops
+/// describing the page the moment they run.
+///
+/// The CLI mirror of `pipe_report::invalidates_baseline`, matching on the typed enum rather
+/// than on a JSON object. The two lists have to agree, and today they are kept in step by
+/// hand; `docs/design/verb-vocabulary.md` is about removing exactly that class of hand-kept
+/// agreement.
+const fn invalidates_baseline(command: &Command) -> bool {
+    match command {
+        Command::Eval { .. } => true,
+        // Only when it was asked to scroll: a plain extract moves nothing, and clearing there
+        // would cost every caller a change report to fix a claim nobody made.
+        Command::Extract { scroll, .. } => *scroll,
+        _ => false,
+    }
+}
+
 /// The biggest awaited futures in this function are `Box::pin`ned before being awaited.
 ///
 /// Not style: `clippy::large_stack_frames` (nursery, denied in CI) sums the sizes of every MIR
@@ -224,6 +241,17 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
         budget: cli.budget,
         on_intercept: crate::hit_test::OnIntercept::parse(&cli.on_intercept)?,
     };
+    // The same rule pipe and batch apply, on the surface that keeps its baseline in
+    // `sessions.json` between invocations rather than in memory. A command that can move the
+    // page and does not answer for it must not leave the previous snapshot standing: the next
+    // invocation would diff against it and report this command's changes as its own.
+    //
+    // Before the match, not inside the arms: `cli.command` is consumed by it, and the point
+    // of clearing early is that it must not depend on the command succeeding.
+    if invalidates_baseline(&cli.command) {
+        crate::pipe_report::clear_baseline(&mut store, &cli.browser, &cli.page);
+        let _ = session::save_session(&mut store);
+    }
     match cli.command {
         Command::Goto { url, inspect, max_depth, wait_for, headers } => {
             let depth = max_depth.or(cli.max_depth);
