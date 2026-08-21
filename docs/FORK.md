@@ -88,14 +88,26 @@ Run on Linux, against a real Chrome:
 - The static musl artifact builds, links statically, and drives a live site
 - A 61-command pipe session against a live site with no drift or failures
 
-Two gaps, recorded rather than glossed:
+Cross-compiled and lint-gated for `x86_64-pc-windows-msvc`:
 
-1. **CI has never run on this fork.** GitHub gates fork workflows behind a one-time click in
-   the Actions tab that is not reachable from the API. Everything above was verified on one
-   developer machine. Enabling it is the highest-value outstanding item.
-2. **The Windows lock change is unverified on Windows.** It is the one change whose entire
-   purpose is a platform we have not tested on. `File::lock` maps to `LockFileEx`, and Linux
-   behaviour is provably unchanged, but that is documentation rather than observation.
+- `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings` clean
 
-Untested more broadly: macOS, `--stealth`, `--connect`, `--copy-cookies`, downloads and PDF
-against real sites, iframes on real pages, and the npm packaging path.
+One gap, and it needs a click rather than code:
+
+**CI has never run on this fork.** GitHub gates fork workflows behind a one-time enable in
+the Actions tab that is not reachable from the API. Everything above was verified on one
+developer machine. `ci.yml` now carries a `windows-2022` job and a `workflow_dispatch`
+trigger, so enabling Actions once gets both Linux and Windows validation.
+
+Until that first Windows run, the lock change remains reasoned rather than observed:
+`File::lock` maps to `LockFileEx`, and Linux behaviour is provably unchanged, but nothing
+has executed it there.
+
+The Windows job deliberately does NOT set `CHROME_AGENT_REQUIRE_CHROME` yet. The suite has
+never run on that platform, so the first green run is what tells us which tests are actually
+portable; turning skips into failures before that is assuming the answer. Tighten it once
+there is a baseline.
+
+Untested still: macOS, `--stealth`, `--connect`, `--copy-cookies`, downloads and PDF against
+real sites, iframes on real pages, and the npm packaging path.
+

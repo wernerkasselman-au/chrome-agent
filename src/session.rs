@@ -322,11 +322,19 @@ fn is_provably_dead(session: &BrowserSession) -> bool {
 /// a stale entry is inert, and the launch path already relaunches over one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Liveness {
+    // Reachable only from the Unix paths. Kept rather than `#[cfg(unix)]`-ed out so the
+    // type keeps one shape on every platform and a `match` on it does not need arms
+    // that differ by target.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Alive,
     Dead,
     Unknown,
 }
 
+// On non-Unix the body below reduces to a constant, so clippy asks for a `const fn`
+// there and rejects one here, where the Unix arm does real work. Scoped to the
+// platform that raises it rather than shipping two spellings of the function.
+#[cfg_attr(not(unix), allow(clippy::missing_const_for_fn))]
 pub fn liveness(pid: u32) -> Liveness {
     #[cfg(unix)]
     {
@@ -361,6 +369,8 @@ pub fn liveness(pid: u32) -> Liveness {
 
 /// Remove stale browser sessions where the process is no longer running
 /// or the WebSocket endpoint is unreachable.
+/// Unix-only in practice: every caller sits behind `#[cfg(unix)]`.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn cleanup_stale(store: &mut SessionStore) {
     store.browsers.retain(|_name, session| {
         if let Some(pid) = session.pid {
@@ -374,6 +384,8 @@ pub fn cleanup_stale(store: &mut SessionStore) {
 
 /// Quick check if a WebSocket endpoint's Chrome is still alive
 /// by probing the HTTP /json/version endpoint (same host:port).
+/// Unix-only in practice: every caller sits behind `#[cfg(unix)]`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn is_ws_reachable(ws_url: &str) -> bool {
     let http_url = crate::browser::extract_http_from_ws(ws_url);
     let version_url = format!("{http_url}/json/version");
@@ -459,6 +471,8 @@ pub fn daemon_socket_path() -> Result<PathBuf, SessionError> {
 }
 
 /// Path to the daemon PID file.
+/// Unix-only in practice: every caller sits behind `#[cfg(unix)]`.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn daemon_pid_path() -> Result<PathBuf, SessionError> {
     Ok(dev_browser_dir()?.join("daemon.pid"))
 }
@@ -475,6 +489,8 @@ fn dev_browser_dir() -> Result<PathBuf, SessionError> {
 
 /// Treats anything short of a definite "no such process" as alive, so `cleanup_stale`
 /// keeps whatever [`liveness`] could not classify — the same bias as [`is_provably_dead`].
+/// Unix-only in practice: every caller sits behind `#[cfg(unix)]`.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn is_process_alive(pid: u32) -> bool {
     liveness(pid) != Liveness::Dead
 }

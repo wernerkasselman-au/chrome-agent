@@ -68,3 +68,41 @@ jobs:
             fi
           done
           echo "Dependency graph is pure Rust — static musl Linux builds stay portable."
+
+  # FORK. Windows was build-only upstream and had never been exercised: the test suite did
+  # not compile for `x86_64-pc-windows-msvc` at all, because two pieces of Unix-only test
+  # code were never gated. Either one took the whole test binary down, so `cargo test` had
+  # never run on the platform. That is how a `FileLock` whose non-Unix arm was an empty
+  # struct returning `Ok(())` survived, under the one feature that advertises isolation.
+  #
+  # Pinned image for the same reason the Linux job pins one: a surprise image change should
+  # not arrive as a browser failure in an unrelated PR.
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo clippy --all-targets -- -D warnings
+      # Same rule the Linux job states: a skip is a pass, so a runner image without Chrome
+      # would turn the browser tests into green no-ops rather than failing.
+      - name: Require a real browser for the test run
+        shell: pwsh
+        run: |
+          $chrome = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) {
+            Write-Error "No Chrome on this runner. The browser tests would skip themselves and report green."
+            exit 1
+          }
+          & $chrome --version
+      # `--test-threads=1` for the reason the Linux job uses it: the suite drives real
+      # browsers and a shared session store.
+      #
+      # CHROME_AGENT_REQUIRE_CHROME is deliberately NOT set yet. The suite has never run on
+      # this platform, so the first green run is the one that tells us which tests are
+      # genuinely portable. Turning skips into failures before that is knowing the answer in
+      # advance. Tighten it once this job has a baseline.
+      - run: cargo test -- --test-threads=1

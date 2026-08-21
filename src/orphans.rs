@@ -87,7 +87,7 @@ fn process_table() -> Option<String> {
 }
 
 #[cfg(not(unix))]
-fn process_table() -> Option<String> {
+const fn process_table() -> Option<String> {
     None
 }
 

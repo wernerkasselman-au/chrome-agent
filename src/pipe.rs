@@ -422,6 +422,9 @@ async fn connect_browser(
                 return Ok((conn, client));
             }
         } else if let Some(pid) = existing.pid {
+            // Read only by the Unix branch below; without the underscore this is an unused
+            // binding on every other platform.
+            let _ = pid;
             #[cfg(unix)]
             {
                 let _ = std::process::Command::new("kill")

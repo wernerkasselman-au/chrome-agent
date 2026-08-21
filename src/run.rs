@@ -81,6 +81,9 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
                     }
                 }
             }
+            // Unreachable on non-Unix: the arm above has already returned. Scoped rather
+            // than silenced, so the platform that cannot get here does not carry the line.
+            #[cfg(unix)]
             return Ok(());
         }
 

@@ -271,6 +271,10 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 }
 
 /// This machine's hostname, as `SingletonLock` spells it.
+// On non-Unix the body below reduces to a constant, so clippy asks for a `const fn`
+// there and rejects one here, where the Unix arm does real work. Scoped to the
+// platform that raises it rather than shipping two spellings of the function.
+#[cfg_attr(not(unix), allow(clippy::missing_const_for_fn))]
 fn this_host() -> Option<String> {
     #[cfg(unix)]
     {

@@ -80,6 +80,10 @@ pub enum KillOutcome {
     /// The pid holds a live process that is not a browser: a reused number, left alone.
     NotABrowser,
     /// The pid holds no process. Nothing to signal, nothing lost.
+    // Reachable only from the Unix paths. Kept rather than `#[cfg(unix)]`-ed out so the
+    // type keeps one shape on every platform and a `match` on it does not need arms
+    // that differ by target.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Gone,
 }
 
@@ -95,6 +99,10 @@ pub enum KillOutcome {
 /// Returns which of those three happened, so a caller can say so. Callers that kill
 /// on their way to relaunching (`run.rs`) or on interrupt (`main.rs`) discard it:
 /// they act the same either way.
+// On non-Unix the body below reduces to a constant, so clippy asks for a `const fn`
+// there and rejects one here, where the Unix arm does real work. Scoped to the
+// platform that raises it rather than shipping two spellings of the function.
+#[cfg_attr(not(unix), allow(clippy::missing_const_for_fn))]
 pub fn kill_pid(pid: u32) -> KillOutcome {
     #[cfg(unix)]
     {

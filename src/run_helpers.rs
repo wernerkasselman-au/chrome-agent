@@ -616,7 +616,7 @@ pub async fn cmd_stop(json_mode: bool) -> Result<(), crate::BoxError> {
         let msg = "Daemon is not supported on this platform.";
         if json_mode { json_output(&json!({"ok": true, "message": msg})); }
         else { println!("{msg}"); }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(unix)]

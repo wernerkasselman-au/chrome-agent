@@ -9,6 +9,10 @@ use serde_json::Value;
 /// are secrets. It was created with whatever the umask allowed, typically 0644, while
 /// screenshot, pdf, download and the session store all chmod 0600. Applied on every write
 /// rather than at creation: the file may already exist, wider, from an earlier run.
+// On non-Unix the body below reduces to a constant, so clippy asks for a `const fn`
+// there and rejects one here, where the Unix arm does real work. Scoped to the
+// platform that raises it rather than shipping two spellings of the function.
+#[cfg_attr(not(unix), allow(clippy::missing_const_for_fn))]
 fn restrict(path: &str) {
     #[cfg(unix)]
     {
