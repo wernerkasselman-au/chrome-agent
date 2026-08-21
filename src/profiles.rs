@@ -323,7 +323,15 @@ pub fn all_removable(
     found
 }
 
-#[cfg(test)]
+// Unix-only, and the gate is what lets the suite COMPILE on Windows at all. Every test here
+// backdates an mtime through `utimensat` and reads a `SingletonLock` symlink, and the module
+// under test is itself Unix-shaped: without a hostname no profile is ever provably free, so
+// the non-Unix path never removes anything.
+//
+// Ungated, this module failed to build for `x86_64-pc-windows-msvc`, which took the whole
+// test binary with it. That is how a `FileLock` that was a no-op on non-Unix survived: the
+// suite had never been compiled for the platform, let alone run there.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -378,7 +386,7 @@ mod tests {
         dir
     }
 
-    fn week() -> Duration {
+    const fn week() -> Duration {
         Duration::from_hours(24 * 7)
     }
 

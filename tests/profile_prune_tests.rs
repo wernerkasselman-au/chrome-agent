@@ -5,6 +5,12 @@
 //! wiring — the sweep riding on `save_session` under its exclusive lock — and not just the
 //! predicate, which `src/profiles.rs` unit-tests directly.
 
+// Unix-only: this suite creates `SingletonLock` symlinks, shells out to `hostname` and
+// `sleep`, and backdates mtimes. The module it exercises never removes a profile on
+// non-Unix, so there is nothing here to assert there. Gated so the suite COMPILES on
+// Windows rather than failing the whole test binary.
+#![cfg(unix)]
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
