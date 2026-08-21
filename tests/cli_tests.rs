@@ -281,38 +281,23 @@ fn headed_goto_and_eval() {
 
     let b = TestBrowser::new("test-integration");
 
-    // Navigate
-    let (stdout, stderr, code) = run_cli_full(&[
-        "--browser",
-        b.name(),
-        "goto",
-        "https://example.com",
-    ]);
+    // A local fixture with a known title, not the public internet. This test is about a
+    // second invocation reusing the first one's browser; the destination is incidental.
+    //
+    // It used to navigate to example.com and, when that failed, `eprintln!` and return, which
+    // counts as a pass. So a network problem did not skip this test visibly or fail it: it
+    // silently asserted nothing, on the very path CHROME_AGENT_REQUIRE_CHROME exists to keep
+    // honest.
+    let url = common::fixture_url("press_keys.html");
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "goto", &url]);
+    assert_eq!(code, 0, "goto the local fixture: {stdout}");
+    assert!(stdout.contains("Key events"), "goto output: {stdout}");
 
-    if code != 0 {
-        eprintln!("goto failed (may be network issue): {stderr}");
-        return;
-    }
-
-    assert!(
-        stdout.contains("example.com") || stdout.contains("Example"),
-        "goto output: {stdout}"
-    );
-
-    // Eval on same browser
-    let (stdout, _, code) = run_cli_full(&[
-        "--browser",
-        b.name(),
-        "eval",
-        "document.title",
-    ]);
-
-    if code == 0 {
-        assert!(
-            stdout.contains("Example Domain") || stdout.contains("example"),
-            "eval output: {stdout}"
-        );
-    }
+    // Eval on the same browser, which is what this test is really for: the second invocation
+    // finds the session the first one wrote and does not launch a second Chrome.
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "eval", "document.title"]);
+    assert_eq!(code, 0, "eval on the reused browser: {stdout}");
+    assert!(stdout.contains("Key events"), "eval output: {stdout}");
 }
 
 #[test]
@@ -362,10 +347,16 @@ fn headed_inspect_returns_uids() {
 
     let b = TestBrowser::new("test-inspect");
 
-    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
+    // A local fixture, not the public internet. These two tests are about what `inspect` and
+    // `screenshot` return in headed mode; the destination is incidental. Pointing them at
+    // example.com made the gate depend on a third party being reachable, and under
+    // CHROME_AGENT_REQUIRE_CHROME a transient network failure is not a skip, it is a red
+    // build. It failed exactly that way on a clean runner.
+    let url = common::fixture_url("press_keys.html");
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", &url]);
 
     if code != 0 {
-        common::unavailable("goto https://example.com failed");
+        common::unavailable("goto the local fixture failed");
         return;
     }
 
@@ -384,10 +375,16 @@ fn headed_screenshot_returns_path() {
 
     let b = TestBrowser::new("test-screenshot");
 
-    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
+    // A local fixture, not the public internet. These two tests are about what `inspect` and
+    // `screenshot` return in headed mode; the destination is incidental. Pointing them at
+    // example.com made the gate depend on a third party being reachable, and under
+    // CHROME_AGENT_REQUIRE_CHROME a transient network failure is not a skip, it is a red
+    // build. It failed exactly that way on a clean runner.
+    let url = common::fixture_url("press_keys.html");
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", &url]);
 
     if code != 0 {
-        common::unavailable("goto https://example.com failed");
+        common::unavailable("goto the local fixture failed");
         return;
     }
 
@@ -418,10 +415,13 @@ fn headed_tabs_lists_pages() {
 
     let b = TestBrowser::new("test-tabs");
 
-    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
+    // A local fixture, not the public internet: this test is about `tabs` listing the open
+    // tab, and the destination is incidental. See the note on the inspect test above.
+    let url = common::fixture_url("press_keys.html");
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", &url]);
 
     if code != 0 {
-        common::unavailable("goto https://example.com failed");
+        common::unavailable("goto the local fixture failed");
         return;
     }
 
@@ -429,7 +429,7 @@ fn headed_tabs_lists_pages() {
 
     if code == 0 {
         assert!(
-            stdout.contains("TARGET_ID") || stdout.contains("example.com"),
+            stdout.contains("TARGET_ID") || stdout.contains("press_keys.html"),
             "tabs output: {stdout}"
         );
     }
