@@ -1,37 +1,13 @@
 use std::process::Command;
 
 mod common;
+use common::{binary, run_cli_full};
 
-/// Get the path to the built binary.
-fn binary() -> String {
-    let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-/// Run chrome-agent with args and return (stdout, stderr, `exit_code`).
-fn run_cli(args: &[&str]) -> (String, String, i32) {
-    let output = Command::new(binary())
-        .args(args)
-        .output()
-        .expect("Failed to run chrome-agent");
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-
-    (stdout, stderr, code)
-}
 
 #[test]
 fn help_shows_all_subcommands() {
-    let (stdout, _, code) = run_cli(&["--help"]);
+    let (stdout, _, code) = run_cli_full(&["--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("goto"));
     assert!(stdout.contains("click"));
@@ -55,7 +31,7 @@ fn help_shows_all_subcommands() {
 
 #[test]
 fn help_includes_llm_guide() {
-    let (stdout, _, code) = run_cli(&["--help"]);
+    let (stdout, _, code) = run_cli_full(&["--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("LLM USAGE GUIDE"));
     assert!(stdout.contains("inspect -> read uids -> act"));
@@ -64,7 +40,7 @@ fn help_includes_llm_guide() {
 
 #[test]
 fn help_shows_global_flags() {
-    let (stdout, _, code) = run_cli(&["--help"]);
+    let (stdout, _, code) = run_cli_full(&["--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("--browser"));
     assert!(stdout.contains("--connect"));
@@ -148,7 +124,7 @@ fn a_flag_that_must_precede_the_verb_says_so_instead_of_offering_to_escape_it() 
         (vec!["click", "n1", "--timeout", "5"], "--timeout", "chrome-agent --timeout 5 click n1"),
         (vec!["text", "--max-depth", "2"], "--max-depth", "chrome-agent --max-depth 2 text"),
     ] {
-        let (_, stderr, code) = run_cli(&args);
+        let (_, stderr, code) = run_cli_full(&args);
         assert_eq!(code, 1, "{args:?} should still be a usage error: {stderr}");
         assert!(
             stderr.contains(&format!("hint: {flag} is read before the verb")),
@@ -187,7 +163,7 @@ fn a_flag_that_must_precede_the_verb_says_so_instead_of_offering_to_escape_it() 
 /// one error clap gets wrong, not its output in general.
 #[test]
 fn an_unrelated_usage_error_is_left_to_clap() {
-    let (_, stderr, code) = run_cli(&["click", "n1", "--nonsense"]);
+    let (_, stderr, code) = run_cli_full(&["click", "n1", "--nonsense"]);
     assert_eq!(code, 1);
     assert!(stderr.contains("unexpected argument '--nonsense'"), "{stderr}");
     assert!(stderr.contains("-- --nonsense"), "clap's tip should survive here: {stderr}");
@@ -196,14 +172,14 @@ fn an_unrelated_usage_error_is_left_to_clap() {
 
 #[test]
 fn version_flag() {
-    let (stdout, _, code) = run_cli(&["--version"]);
+    let (stdout, _, code) = run_cli_full(&["--version"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("chrome-agent"));
 }
 
 #[test]
 fn status_works_without_browser() {
-    let (stdout, _, code) = run_cli(&["status"]);
+    let (stdout, _, code) = run_cli_full(&["status"]);
     assert_eq!(code, 0);
     // Should show either "No active browser sessions" or existing sessions
     assert!(
@@ -214,14 +190,14 @@ fn status_works_without_browser() {
 
 #[test]
 fn stop_when_no_daemon() {
-    let (stdout, _, code) = run_cli(&["stop"]);
+    let (stdout, _, code) = run_cli_full(&["stop"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("not running") || stdout.contains("stopped"));
 }
 
 #[test]
 fn goto_subcommand_help() {
-    let (stdout, _, code) = run_cli(&["goto", "--help"]);
+    let (stdout, _, code) = run_cli_full(&["goto", "--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Navigate to a URL"));
     assert!(stdout.contains("--inspect"));
@@ -229,7 +205,7 @@ fn goto_subcommand_help() {
 
 #[test]
 fn click_subcommand_help() {
-    let (stdout, _, code) = run_cli(&["click", "--help"]);
+    let (stdout, _, code) = run_cli_full(&["click", "--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Click an element"));
     // The one-liner is what a token-conscious agent reads instead of the 26 KB `--help`, so it
@@ -241,7 +217,7 @@ fn click_subcommand_help() {
 
 #[test]
 fn fill_subcommand_help() {
-    let (stdout, _, code) = run_cli(&["fill", "--help"]);
+    let (stdout, _, code) = run_cli_full(&["fill", "--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Fill an input"));
     assert!(stdout.contains("--inspect"));
@@ -249,7 +225,7 @@ fn fill_subcommand_help() {
 
 #[test]
 fn inspect_subcommand_help() {
-    let (stdout, _, code) = run_cli(&["inspect", "--help"]);
+    let (stdout, _, code) = run_cli_full(&["inspect", "--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("accessibility tree inspection"));
     assert!(stdout.contains("--verbose"));
@@ -257,7 +233,7 @@ fn inspect_subcommand_help() {
 
 #[test]
 fn eval_subcommand_help() {
-    let (stdout, _, code) = run_cli(&["eval", "--help"]);
+    let (stdout, _, code) = run_cli_full(&["eval", "--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Evaluate JavaScript"));
 }
@@ -283,7 +259,7 @@ impl TestBrowser {
 
 impl Drop for TestBrowser {
     fn drop(&mut self) {
-        let _ = run_cli(&["--browser", &self.0, "close", "--purge"]);
+        let _ = run_cli_full(&["--browser", &self.0, "close", "--purge"]);
     }
 }
 
@@ -296,7 +272,7 @@ fn headed_goto_and_eval() {
     let b = TestBrowser::new("test-integration");
 
     // Navigate
-    let (stdout, stderr, code) = run_cli(&[
+    let (stdout, stderr, code) = run_cli_full(&[
         "--browser",
         b.name(),
         "goto",
@@ -314,7 +290,7 @@ fn headed_goto_and_eval() {
     );
 
     // Eval on same browser
-    let (stdout, _, code) = run_cli(&[
+    let (stdout, _, code) = run_cli_full(&[
         "--browser",
         b.name(),
         "eval",
@@ -347,19 +323,19 @@ fn dblclick_selector_fires_real_double_click() {
     std::fs::write(&path, html).expect("write fixture");
     let url = format!("file://{}", path.display());
 
-    let (_, stderr, code) = run_cli(&["--browser", b.name(), "goto", &url]);
+    let (_, stderr, code) = run_cli_full(&["--browser", b.name(), "goto", &url]);
     if code != 0 {
         let _ = std::fs::remove_file(&path);
         common::unavailable(&format!("goto dblclick fixture failed: {stderr}"));
         return;
     }
 
-    let (_, _, code) = run_cli(&["--browser", b.name(), "dblclick", "--selector", "#b"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "dblclick", "--selector", "#b"]);
     assert_eq!(code, 0, "dblclick --selector should succeed");
 
     // The whole point of the fix: a selector double-click must fire `dblclick`,
     // not just a single `click`. Pre-fix (click_selector → el.click()) left __d=0.
-    let (stdout, _, code) = run_cli(&["--browser", b.name(), "eval", "String(window.__d||0)"]);
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "eval", "String(window.__d||0)"]);
     let _ = std::fs::remove_file(&path);
     assert_eq!(code, 0, "eval should succeed");
     assert!(
@@ -376,14 +352,14 @@ fn headed_inspect_returns_uids() {
 
     let b = TestBrowser::new("test-inspect");
 
-    let (_, _, code) = run_cli(&["--browser", b.name(), "goto", "https://example.com"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
 
     if code != 0 {
         common::unavailable("goto https://example.com failed");
         return;
     }
 
-    let (stdout, _, code) = run_cli(&["--browser", b.name(), "inspect"]);
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "inspect"]);
 
     if code == 0 {
         assert!(stdout.contains("uid="), "inspect should contain uid=N: {stdout}");
@@ -398,14 +374,14 @@ fn headed_screenshot_returns_path() {
 
     let b = TestBrowser::new("test-screenshot");
 
-    let (_, _, code) = run_cli(&["--browser", b.name(), "goto", "https://example.com"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
 
     if code != 0 {
         common::unavailable("goto https://example.com failed");
         return;
     }
 
-    let (stdout, _, code) = run_cli(&["--browser", b.name(), "screenshot"]);
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "screenshot"]);
 
     if code == 0 {
         assert!(
@@ -428,14 +404,14 @@ fn headed_tabs_lists_pages() {
 
     let b = TestBrowser::new("test-tabs");
 
-    let (_, _, code) = run_cli(&["--browser", b.name(), "goto", "https://example.com"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "goto", "https://example.com"]);
 
     if code != 0 {
         common::unavailable("goto https://example.com failed");
         return;
     }
 
-    let (stdout, _, code) = run_cli(&["--browser", b.name(), "tabs"]);
+    let (stdout, _, code) = run_cli_full(&["--browser", b.name(), "tabs"]);
 
     if code == 0 {
         assert!(

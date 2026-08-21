@@ -1,21 +1,8 @@
-use std::process::Command;
 
 mod common;
+use common::run_cli_full;
 
-fn binary() -> String {
-    let mut path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-fn run_cli(args: &[&str]) -> (String, String, i32) {
-    let output = Command::new(binary()).args(args).output().expect("Failed to run chrome-agent");
-    (
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-        output.status.code().unwrap_or(-1),
-    )
-}
 
 struct TestBrowser(String);
 impl TestBrowser {
@@ -32,13 +19,13 @@ impl TestBrowser {
 }
 impl Drop for TestBrowser {
     fn drop(&mut self) {
-        let _ = run_cli(&["--browser", &self.0, "close", "--purge"]);
+        let _ = run_cli_full(&["--browser", &self.0, "close", "--purge"]);
     }
 }
 
 fn goto(browser: &str, fixture: &str) -> bool {
     let url = common::fixture_url(fixture);
-    let (_, stderr, code) = run_cli(&["--browser", browser, "goto", &url]);
+    let (_, stderr, code) = run_cli_full(&["--browser", browser, "goto", &url]);
     if code != 0 {
         return common::unavailable(&format!("goto {fixture} failed: {stderr}"));
     }
@@ -46,7 +33,7 @@ fn goto(browser: &str, fixture: &str) -> bool {
 }
 
 fn diff_json(browser: &str) -> Option<serde_json::Value> {
-    let (stdout, _, _) = run_cli(&["--browser", browser, "--json", "diff"]);
+    let (stdout, _, _) = run_cli_full(&["--browser", browser, "--json", "diff"]);
     serde_json::from_str(&stdout).ok()
 }
 
@@ -66,7 +53,7 @@ fn diff_reports_document_change_instead_of_pairing_unrelated_uids() {
     if !goto(b.name(), "extract_cards.html") {
         return;
     }
-    let (_, _, code) = run_cli(&["--browser", b.name(), "inspect"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "inspect"]);
     assert_eq!(code, 0, "inspect should succeed");
 
     if !goto(b.name(), "extract_hn_subtext.html") {
@@ -90,11 +77,11 @@ fn diff_on_the_same_document_still_reports_changes() {
     if !goto(b.name(), "extract_cards.html") {
         return;
     }
-    let (_, _, code) = run_cli(&["--browser", b.name(), "inspect"]);
+    let (_, _, code) = run_cli_full(&["--browser", b.name(), "inspect"]);
     assert_eq!(code, 0, "inspect should succeed");
 
     // Mutate the live document without navigating.
-    let (_, _, code) = run_cli(&[
+    let (_, _, code) = run_cli_full(&[
         "--browser",
         b.name(),
         "eval",

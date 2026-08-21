@@ -1,33 +1,12 @@
-use std::process::Command;
 
 mod common;
+use common::run_cli_full;
 
-fn binary() -> String {
-    let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-fn run_cli(args: &[&str]) -> (String, String, i32) {
-    let output = Command::new(binary())
-        .args(args)
-        .output()
-        .expect("Failed to run chrome-agent");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-    (stdout, stderr, code)
-}
 
 fn goto_fixture(browser: &str, fixture: &str) -> bool {
     let url = common::fixture_url(fixture);
-    let (_, stderr, code) = run_cli(&["--browser", browser, "goto", &url]);
+    let (_, stderr, code) = run_cli_full(&["--browser", browser, "goto", &url]);
     if code != 0 {
         return common::unavailable(&format!("goto {fixture} failed: {stderr}"));
     }
@@ -35,7 +14,7 @@ fn goto_fixture(browser: &str, fixture: &str) -> bool {
 }
 
 fn extract_json(browser: &str) -> Option<serde_json::Value> {
-    let (stdout, stderr, code) = run_cli(&["--json", "--browser", browser, "extract"]);
+    let (stdout, stderr, code) = run_cli_full(&["--json", "--browser", browser, "extract"]);
     if code != 0 {
         eprintln!("extract failed: {stderr} {stdout}");
         return None;
@@ -52,7 +31,7 @@ fn extract_json(browser: &str) -> Option<serde_json::Value> {
 fn extract_json_with_args(browser: &str, args: &[&str]) -> Option<serde_json::Value> {
     let mut full_args = vec!["--json", "--browser", browser, "extract"];
     full_args.extend_from_slice(args);
-    let (stdout, stderr, code) = run_cli(&full_args);
+    let (stdout, stderr, code) = run_cli_full(&full_args);
     if code != 0 {
         eprintln!("extract failed: {stderr} {stdout}");
         return None;
@@ -67,7 +46,7 @@ fn extract_json_with_args(browser: &str, args: &[&str]) -> Option<serde_json::Va
 }
 
 fn cleanup(browser: &str) {
-    let _ = run_cli(&["--browser", browser, "close", "--purge"]);
+    let _ = run_cli_full(&["--browser", browser, "close", "--purge"]);
 }
 
 /// RAII guard: closes browser on drop (even on panic).
@@ -273,7 +252,7 @@ fn extract_no_pattern_returns_error() {
     let b = TestBrowser::new("ext-nopattern");
     if !goto_fixture(b.name(), "extract_no_pattern.html") { return; }
 
-    let (stdout, _, code) = run_cli(&["--json", "--browser", b.name(), "extract"]);
+    let (stdout, _, code) = run_cli_full(&["--json", "--browser", b.name(), "extract"]);
 
     if code == 0 {
         for line in stdout.lines() {

@@ -5,18 +5,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod common;
+use common::binary;
 
-fn binary() -> String {
-    let mut path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
 struct BrowserGuard(&'static str);
 

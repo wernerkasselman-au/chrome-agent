@@ -14,22 +14,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::process::{Command, Stdio};
 
 mod common;
+use common::{binary, run_cli};
 
-fn binary() -> String {
-    let mut path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-fn run_cli(args: &[&str]) -> i32 {
-    Command::new(binary())
-        .args(args)
-        .output()
-        .expect("Failed to run chrome-agent")
-        .status
-        .code()
-        .unwrap_or(-1)
-}
 
 fn temp_path(name: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();

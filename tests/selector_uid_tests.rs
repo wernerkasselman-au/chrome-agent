@@ -12,20 +12,9 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 mod common;
+use common::{binary, run_cli};
 
-fn binary() -> String {
-    let mut path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-fn run_cli(args: &[&str]) -> (String, i32) {
-    let output = Command::new(binary()).args(args).output().expect("Failed to run chrome-agent");
-    (
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        output.status.code().unwrap_or(-1),
-    )
-}
 
 struct TestBrowser(String);
 impl TestBrowser {

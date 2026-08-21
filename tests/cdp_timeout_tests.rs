@@ -10,23 +10,12 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
+use common::{binary, run_cli};
 
 /// Generous enough that a real answer always beats it, short enough that a hang is caught.
 const HANG_LIMIT: Duration = Duration::from_secs(45);
 
-fn binary() -> String {
-    let mut path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-    path.push("chrome-agent");
-    path.to_string_lossy().into_owned()
-}
 
-fn run_cli(args: &[&str]) -> (String, i32) {
-    let output = Command::new(binary()).args(args).output().expect("Failed to run chrome-agent");
-    (
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        output.status.code().unwrap_or(-1),
-    )
-}
 
 /// Run and fail the test rather than the suite if the command hangs.
 fn run_bounded(args: &[&str]) -> (String, i32, Duration) {
