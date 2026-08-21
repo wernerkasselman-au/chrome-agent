@@ -223,6 +223,45 @@ pub fn attach_verdict_for(
     assessment
 }
 
+/// Commands that can move the page and do not answer for it.
+///
+/// `eval` runs caller-supplied JavaScript, so it can click, submit, or rewrite the DOM. It
+/// is deliberately not in `mutates_page`: a change report costs a `settle` plus a tree read
+/// (measured at ~100ms against ~10ms for the eval itself), and `eval` is also the documented
+/// way to pull structured data out of a page. Making every read pay for a write is the wrong
+/// trade.
+///
+/// What it must not do is leave a stale baseline behind. Measured: on a page where an `eval`
+/// appended a paragraph, the NEXT command, a click on an inert button, answered
+/// `changed / tree_delta` and quoted that paragraph as its own delta. Not a missing claim, a
+/// false one, about which command caused what.
+///
+/// `goto`, `back` and `forward` keep their baseline on purpose and are safe from this: they
+/// replace the document, so the stored loaderId stops matching and the comparison answers
+/// `document_replaced` rather than believing a diff across two different pages. `eval` leaves
+/// the document identical, which is exactly why the stale diff is taken at face value.
+///
+/// Clearing rather than refreshing: a refreshed baseline would be a claim that the new
+/// snapshot is settled, and settling is the expensive half. The next action answers
+/// `unknown / no_baseline`, which is an admission this vocabulary already has a rung for, and
+/// it stores a fresh baseline as it goes, so only one action pays.
+pub fn invalidates_baseline(cmd: &str) -> bool {
+    matches!(cmd, "eval")
+}
+
+/// Drop the stored baseline for a page, so nothing downstream compares against it.
+pub fn clear_baseline(store: &mut SessionStore, browser_name: &str, page_name: &str) {
+    if let Some(page) = store
+        .browsers
+        .get_mut(browser_name)
+        .and_then(|b| b.pages.get_mut(page_name))
+    {
+        page.last_snapshot = None;
+        page.last_snapshot_frame = None;
+        page.last_snapshot_loader = None;
+    }
+}
+
 /// Commands that can move the page, and therefore owe the caller a change report.
 pub fn mutates_page(cmd: &str) -> bool {
     matches!(

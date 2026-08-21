@@ -310,6 +310,12 @@ async fn dispatch(
         )
         .await;
     }
+    // Same as batch: a command that can move the page without reporting on it must not leave
+    // the previous snapshot standing. See `pipe_report::invalidates_baseline`.
+    if crate::pipe_report::invalidates_baseline(cmd_name) {
+        crate::pipe_report::clear_baseline(store, browser_name, page_name);
+        value["baseline_cleared"] = json!(true);
+    }
     value
 }
 

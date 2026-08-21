@@ -807,6 +807,13 @@ pub async fn dispatch_single(
         )
         .await;
     }
+    // A command that can move the page without reporting on it must not leave the previous
+    // snapshot standing: the next action would diff against it and call this command's
+    // changes its own. See `pipe_report::invalidates_baseline`.
+    if crate::pipe_report::invalidates_baseline(cmd_name) {
+        crate::pipe_report::clear_baseline(store, browser_name, page_name);
+        value["baseline_cleared"] = json!(true);
+    }
     value
 }
 
