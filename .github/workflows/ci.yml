@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Fork-owned: lets the suite be run on demand without inventing a commit. Forks also need
+  # Actions enabled once from the Actions tab; that gate is not reachable from the API.
+  workflow_dispatch:
 
 jobs:
   check:

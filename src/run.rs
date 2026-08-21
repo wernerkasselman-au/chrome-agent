@@ -807,7 +807,7 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
 
         Command::Wait { what, pattern, timeout, idle_ms } => {
             let msg = commands::wait::run(&client, &what, &pattern, timeout, idle_ms).await?;
-            // Not in `mutates_page`, so pipe/batch answer plainly — the CLI must too.
+            // Owes no change report, so pipe/batch answer plainly and the CLI must too.
             if json_mode {
                 json_output(&json!({"ok": true, "message": msg}));
             } else {
@@ -961,7 +961,7 @@ pub async fn run(cli: Cli) -> Result<(), BoxError> {
 
         Command::Frame { target } => {
             let msg = commands::frame::run(&client, &target).await?;
-            // Not in `mutates_page`, so pipe/batch answer plainly — the CLI must too.
+            // Owes no change report, so pipe/batch answer plainly and the CLI must too.
             if json_mode {
                 json_output(&json!({"ok": true, "message": msg}));
             } else {

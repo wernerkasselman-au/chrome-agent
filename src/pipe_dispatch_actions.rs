@@ -333,7 +333,7 @@ pub async fn dispatch_drag(
 /// `{"ok":false,"assertion":{…},"hint":…}` and one that could not be checked answers the
 /// usual `{"ok":false,"error":…}`. The two are told apart by the presence of `assertion`,
 /// and `batch`'s `all_ok` and `stop_on_error` treat both as the failures they are without
-/// needing a second convention. `assert` is not in `mutates_page`: it is a read, so no
+/// needing a second convention. `assert` owes no change report: it is a read, so no
 /// change report and no verdict ride on the response.
 pub async fn dispatch_assert(
     client: &CdpClient, store: &SessionStore, browser_name: &str, page_name: &str, cmd: &Value,

@@ -2,8 +2,8 @@
 //!
 //! Split out of `pipe_dispatch.rs` for the 1000-line cap, and re-exported from it so the
 //! dispatchers keep their existing call sites. This is the central hook the CLAUDE.md
-//! design note describes: adding a mutating command means adding it to `mutates_page` and
-//! nothing else.
+//! design note describes, except that the classification now lives on `PipeVerb` rather
+//! than in a string list here, so the compiler is what enforces it.
 
 use serde_json::{json, Value};
 
@@ -16,7 +16,7 @@ use crate::session::{self, SessionStore};
 /// The hit test runs inside the action, in `element`; the verdict is decided afterwards, in
 /// three different places (CLI, pipe, batch). Passing the delivery through the response rather
 /// than through every dispatcher signature is what keeps those three in agreement — and keeps
-/// `mutates_page` the only thing a new command has to be added to.
+/// the classification on `PipeVerb` the only thing a new command has to answer for.
 ///
 /// A response with no `delivery` field is `NotProbed`: every non-mouse command, and any action
 /// that predates this wiring. Absence of evidence, never a claim.

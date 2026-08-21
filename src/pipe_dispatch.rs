@@ -56,7 +56,8 @@ pub async fn dispatch_goto(
     let _ = commands::history::append(&result.url, &result.title, page_name);
 
     let mut obj = json!({"ok": true, "url": result.url, "title": result.title});
-    // `goto` stays out of `mutates_page`, so nothing else will speak for it: `landed` rides
+    // `goto` answers no to `PipeVerb::requires_change_report`, so nothing else will speak for
+    // it: `landed` rides
     // on its own response, in the one dispatcher pipe and batch share.
     result.landed.attach(&mut obj);
     if inspect {
