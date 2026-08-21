@@ -736,6 +736,15 @@ pub async fn dispatch_single(
     } else {
         None
     };
+    // Cleared BEFORE dispatch, not after. Such a command can move the page and then fail,
+    // and the error path returns early: measured on `extract` with `scroll`, which scrolled a
+    // lazy list into existence and then answered "No repeating pattern found", so a clear
+    // placed after the dispatch never ran. Whether the command succeeded is not the question.
+    // Whether the stored snapshot still describes the page is, and after this one it does not.
+    let cleared_baseline = crate::pipe_report::invalidates_baseline(cmd);
+    if cleared_baseline {
+        crate::pipe_report::clear_baseline(store, browser_name, page_name);
+    }
     let mut value = {
     let result: Result<Value, crate::BoxError> = match cmd_name {
         "goto" => dispatch_goto(client, store, browser_name, page_name, target_id, timeout, global_max_depth, cmd).await,
@@ -785,6 +794,9 @@ pub async fn dispatch_single(
         Err(e) => {
             let msg = e.to_string();
             let mut obj = json!({"ok": false, "error": msg});
+            if cleared_baseline {
+                obj["baseline_cleared"] = json!(true);
+            }
             if let Some(h) = crate::run_helpers::error_hint(&msg, browser_name) { obj["hint"] = json!(h); }
             return obj;
         }
@@ -810,8 +822,7 @@ pub async fn dispatch_single(
     // A command that can move the page without reporting on it must not leave the previous
     // snapshot standing: the next action would diff against it and call this command's
     // changes its own. See `pipe_report::invalidates_baseline`.
-    if crate::pipe_report::invalidates_baseline(cmd_name) {
-        crate::pipe_report::clear_baseline(store, browser_name, page_name);
+    if cleared_baseline {
         value["baseline_cleared"] = json!(true);
     }
     value

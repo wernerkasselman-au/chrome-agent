@@ -245,8 +245,21 @@ pub fn attach_verdict_for(
 /// snapshot is settled, and settling is the expensive half. The next action answers
 /// `unknown / no_baseline`, which is an admission this vocabulary already has a rung for, and
 /// it stores a fresh baseline as it goes, so only one action pays.
-pub fn invalidates_baseline(cmd: &str) -> bool {
-    matches!(cmd, "eval")
+/// Takes the whole command, not just its name: `extract` only moves the page when it was
+/// asked to scroll, and clearing the baseline for the ordinary read would cost every caller
+/// a report for nothing.
+pub fn invalidates_baseline(cmd: &Value) -> bool {
+    match cmd.get("cmd").and_then(Value::as_str).unwrap_or("") {
+        "eval" => true,
+        // `extract --scroll` drives the page to the bottom to trigger lazy loading and then
+        // scrolls back. The scroll position is restored; the content it loaded is not.
+        // Measured: an `extract` with `scroll` appended two list items, and the next click on
+        // an inert button answered `changed / tree_delta` quoting both of them.
+        "extract" => cmd.get("scroll").and_then(Value::as_bool).unwrap_or(false),
+        // `inspect --scroll` scrolls too and is safe: it writes the snapshot it just took as
+        // the new baseline, so there is nothing stale left behind.
+        _ => false,
+    }
 }
 
 /// Drop the stored baseline for a page, so nothing downstream compares against it.

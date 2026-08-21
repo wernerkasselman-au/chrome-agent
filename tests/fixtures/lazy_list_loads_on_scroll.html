@@ -1,0 +1,23 @@
+<!doctype html>
+<html><body>
+<!-- Infinite scroll. `extract --scroll` drives the page to the bottom to trigger exactly this,
+     then scrolls back: the position is restored, the two appended rows are not. -->
+<button id="inert">Inert</button>
+<ul id="list"><li>row 1</li><li>row 2</li></ul>
+<div style="height:2000px"></div>
+<script>
+let loaded = false;
+window.addEventListener('scroll', () => {
+  if (loaded) return;
+  if (window.scrollY + window.innerHeight >= document.body.scrollHeight - 50) {
+    loaded = true;
+    const ul = document.getElementById('list');
+    ['LAZY_A', 'LAZY_B'].forEach(t => {
+      const li = document.createElement('li');
+      li.textContent = t;
+      ul.appendChild(li);
+    });
+  }
+});
+</script>
+</body></html>
